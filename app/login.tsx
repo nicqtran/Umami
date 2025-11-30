@@ -2,6 +2,7 @@ import { useFonts, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@ex
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import {
   Alert,
   Pressable,
@@ -30,10 +31,32 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [focused, setFocused] = useState<null | 'email' | 'password'>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const labelFont = fontsLoaded ? styles.labelLoaded : null;
   const bodyFont = fontsLoaded ? styles.bodyLoaded : null;
   const titleFont = fontsLoaded ? styles.titleLoaded : null;
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Log in', 'Please enter your email and password.');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password.trim(),
+      });
+      if (error) {
+        Alert.alert('Login failed', error.message);
+        return;
+      }
+      router.replace('/(tabs)');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -60,6 +83,7 @@ export default function LoginScreen() {
               autoComplete="email"
               onFocus={() => setFocused('email')}
               onBlur={() => setFocused(null)}
+              returnKeyType="next"
               style={[styles.input, focused === 'email' && styles.inputFocused, bodyFont]}
             />
           </View>
@@ -75,6 +99,12 @@ export default function LoginScreen() {
                 autoCapitalize="none"
                 onFocus={() => setFocused('password')}
                 onBlur={() => setFocused(null)}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (email.trim() && password.trim() && !submitting) {
+                    handleLogin();
+                  }
+                }}
                 style={[styles.passwordInput, focused === 'password' && styles.inputFocused, bodyFont]}
               />
               <Pressable
@@ -91,17 +121,15 @@ export default function LoginScreen() {
 
           <Pressable
             onPress={() => {
-              if (email.trim() && password.trim()) {
-                router.replace('/(tabs)');
-              } else {
-                Alert.alert('Log in', 'Please enter your email and password.');
-              }
+              if (!submitting) handleLogin();
             }}
+            disabled={submitting}
             style={({ pressed }) => [
               styles.cta,
               pressed && styles.ctaPressed,
+              submitting && styles.ctaDisabled,
             ]}>
-            <Text style={[styles.ctaLabel, titleFont]}>Log in</Text>
+            <Text style={[styles.ctaLabel, titleFont]}>{submitting ? 'Logging in...' : 'Log in'}</Text>
           </Pressable>
 
           <Text style={[styles.footerText, bodyFont]}>
@@ -229,6 +257,9 @@ const styles = StyleSheet.create({
   ctaPressed: {
     transform: [{ translateY: 1 }],
     backgroundColor: '#334a5a',
+  },
+  ctaDisabled: {
+    opacity: 0.6,
   },
   ctaLabel: {
     color: '#ffffff',

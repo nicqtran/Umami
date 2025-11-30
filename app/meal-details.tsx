@@ -1,24 +1,26 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
-  Easing,
-  Modal,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    Animated,
+    Easing,
+    Keyboard,
+    Modal,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableWithoutFeedback,
+    View,
 } from 'react-native';
 
-import { Image } from 'expo-image';
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { DeviceEventEmitter } from 'react-native';
-import { getMeals, updateMealFoods, updateMealMeta, deleteMeal as deleteMealFromStore, FoodItem } from '@/state/meals';
-import * as Haptics from 'expo-haptics';
+import { deleteMeal as deleteMealFromStore, FoodItem, getMeals, updateMealFoods, updateMealMeta } from '@/state/meals';
+import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useFonts, Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { DeviceEventEmitter } from 'react-native';
 
 type BreakdownItem = {
   id: string;
@@ -229,13 +231,42 @@ export default function MealDetailsScreen() {
       return [{ ...first, calories: Math.max(0, Math.round(targetCalories)) }, ...rest];
     }
     const ratio = targetCalories / base;
-    return items.map((item) => ({
+    
+    // Scale all items with floating point precision first
+    const scaledItems = items.map((item) => ({
       ...item,
-      calories: Math.max(0, Math.round(item.calories * ratio)),
-      protein: Math.max(0, Math.round(item.protein * ratio)),
-      carbs: Math.max(0, Math.round(item.carbs * ratio)),
-      fat: Math.max(0, Math.round(item.fat * ratio)),
+      calories: Math.max(0, item.calories * ratio),
+      protein: Math.max(0, item.protein * ratio),
+      carbs: Math.max(0, item.carbs * ratio),
+      fat: Math.max(0, item.fat * ratio),
     }));
+    
+    // Round all items except the last one
+    const roundedItems = scaledItems.map((item, index) => {
+      if (index === scaledItems.length - 1) return item; // Keep last item unrounded for now
+      return {
+        ...item,
+        calories: Math.round(item.calories),
+        protein: Math.round(item.protein),
+        carbs: Math.round(item.carbs),
+        fat: Math.round(item.fat),
+      };
+    });
+    
+    // Adjust the last item to ensure the total matches exactly
+    if (roundedItems.length > 0) {
+      const sumWithoutLast = roundedItems.slice(0, -1).reduce((sum, item) => sum + item.calories, 0);
+      const lastItem = roundedItems[roundedItems.length - 1];
+      roundedItems[roundedItems.length - 1] = {
+        ...lastItem,
+        calories: Math.max(0, Math.round(targetCalories - sumWithoutLast)),
+        protein: Math.round(lastItem.protein),
+        carbs: Math.round(lastItem.carbs),
+        fat: Math.round(lastItem.fat),
+      };
+    }
+    
+    return roundedItems;
   };
 
   const startEditingCalories = () => {
@@ -244,7 +275,7 @@ export default function MealDetailsScreen() {
   };
 
   const submitCaloriesEdit = () => {
-    const parsedCalories = parseFloat(caloriesDraft);
+    const parsedCalories = Math.round(parseFloat(caloriesDraft) || 0);
     const targetCalories = Number.isFinite(parsedCalories) ? Math.max(0, parsedCalories) : totals.caloriesTotal;
     const nextItems = scaleItemsToCalories(breakdownItems, targetCalories);
     const nextTotals = computeTotals(nextItems);
@@ -294,10 +325,10 @@ export default function MealDetailsScreen() {
             ...item,
             name: foodDraft.name.trim() || item.name,
             quantity: foodDraft.quantity || item.quantity,
-            calories: Math.max(0, parseFloat(foodDraft.calories) || 0),
-            protein: Math.max(0, parseFloat(foodDraft.protein) || 0),
-            carbs: Math.max(0, parseFloat(foodDraft.carbs) || 0),
-            fat: Math.max(0, parseFloat(foodDraft.fat) || 0),
+            calories: Math.max(0, Math.round(parseFloat(foodDraft.calories) || 0)),
+            protein: Math.max(0, Math.round(parseFloat(foodDraft.protein) || 0)),
+            carbs: Math.max(0, Math.round(parseFloat(foodDraft.carbs) || 0)),
+            fat: Math.max(0, Math.round(parseFloat(foodDraft.fat) || 0)),
           }
         : item,
     );
@@ -320,12 +351,21 @@ export default function MealDetailsScreen() {
     const carbsRatio = currentTotals.carbs > 0 ? targetCarbs / currentTotals.carbs : 1;
     const fatRatio = currentTotals.fat > 0 ? targetFat / currentTotals.fat : 1;
 
-    return items.map((item) => {
-      const newProtein = Math.max(0, Math.round(item.protein * proteinRatio));
-      const newCarbs = Math.max(0, Math.round(item.carbs * carbsRatio));
-      const newFat = Math.max(0, Math.round(item.fat * fatRatio));
-      const newCalories = Math.round(newProtein * 4 + newCarbs * 4 + newFat * 9);
+    // Scale all items with floating point precision first
+    const scaledItems = items.map((item) => ({
+      ...item,
+      protein: Math.max(0, item.protein * proteinRatio),
+      carbs: Math.max(0, item.carbs * carbsRatio),
+      fat: Math.max(0, item.fat * fatRatio),
+    }));
 
+    // Round all items except the last one
+    const roundedItems = scaledItems.map((item, index) => {
+      if (index === scaledItems.length - 1) return item; // Keep last item unrounded for now
+      const newProtein = Math.round(item.protein);
+      const newCarbs = Math.round(item.carbs);
+      const newFat = Math.round(item.fat);
+      const newCalories = Math.round(newProtein * 4 + newCarbs * 4 + newFat * 9);
       return {
         ...item,
         protein: newProtein,
@@ -334,6 +374,33 @@ export default function MealDetailsScreen() {
         calories: newCalories,
       };
     });
+
+    // Adjust the last item to ensure totals match exactly
+    if (roundedItems.length > 0) {
+      const sumsWithoutLast = roundedItems.slice(0, -1).reduce(
+        (acc, item) => ({
+          protein: acc.protein + item.protein,
+          carbs: acc.carbs + item.carbs,
+          fat: acc.fat + item.fat,
+        }),
+        { protein: 0, carbs: 0, fat: 0 }
+      );
+      
+      const lastProtein = Math.max(0, Math.round(targetProtein - sumsWithoutLast.protein));
+      const lastCarbs = Math.max(0, Math.round(targetCarbs - sumsWithoutLast.carbs));
+      const lastFat = Math.max(0, Math.round(targetFat - sumsWithoutLast.fat));
+      const lastCalories = Math.round(lastProtein * 4 + lastCarbs * 4 + lastFat * 9);
+      
+      roundedItems[roundedItems.length - 1] = {
+        ...roundedItems[roundedItems.length - 1],
+        protein: lastProtein,
+        carbs: lastCarbs,
+        fat: lastFat,
+        calories: lastCalories,
+      };
+    }
+
+    return roundedItems;
   };
 
   const startEditingProtein = () => {
@@ -437,13 +504,17 @@ export default function MealDetailsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <Animated.View style={[styles.container, pageStyle]}>
-        <View style={styles.header}>
-          <Pressable style={styles.backButton} onPress={handleExit}>
-            <MaterialCommunityIcons name="arrow-left" size={24} color={text} />
-          </Pressable>
-        </View>
+          <View style={styles.header}>
+            <Pressable style={styles.backButton} onPress={handleExit}>
+              <MaterialCommunityIcons name="arrow-left" size={24} color={text} />
+            </Pressable>
+          </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
           <Animated.View style={[styles.heroSection, createCardStyle(cardAnims[0])]}>
             <Pressable onPress={() => setShowImageModal(true)}>
               <Image source={mealImageSource} style={styles.heroImage} contentFit="cover" />
@@ -455,8 +526,8 @@ export default function MealDetailsScreen() {
                 onChangeText={setMealNameDraft}
                 onSubmitEditing={submitRenaming}
                 onBlur={cancelRenaming}
-                autoFocus
                 returnKeyType="done"
+                autoFocus
                 placeholder="Meal name"
                 placeholderTextColor={muted}
               />
@@ -477,8 +548,8 @@ export default function MealDetailsScreen() {
                   onChangeText={setCaloriesDraft}
                   onSubmitEditing={submitCaloriesEdit}
                   onBlur={cancelCaloriesEdit}
-                  autoFocus
                   returnKeyType="done"
+                  autoFocus
                   keyboardType="numeric"
                   placeholder="0"
                   placeholderTextColor={muted}
@@ -615,6 +686,7 @@ export default function MealDetailsScreen() {
                   onChangeText={(text) => setFoodDraft((prev) => (prev ? { ...prev, name: text } : prev))}
                   placeholder="Food name"
                   placeholderTextColor={muted}
+                  returnKeyType="next"
                 />
               </View>
               <View style={styles.inputGroup}>
@@ -625,6 +697,7 @@ export default function MealDetailsScreen() {
                   onChangeText={(text) => setFoodDraft((prev) => (prev ? { ...prev, quantity: text } : prev))}
                   placeholder="e.g. 120g"
                   placeholderTextColor={muted}
+                  returnKeyType="next"
                 />
               </View>
               <View style={styles.inputRow}>
@@ -637,6 +710,7 @@ export default function MealDetailsScreen() {
                     keyboardType="numeric"
                     placeholder="120"
                     placeholderTextColor={muted}
+                    returnKeyType="next"
                   />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -648,6 +722,7 @@ export default function MealDetailsScreen() {
                     keyboardType="numeric"
                     placeholder="8"
                     placeholderTextColor={muted}
+                    returnKeyType="next"
                   />
                 </View>
               </View>
@@ -661,6 +736,7 @@ export default function MealDetailsScreen() {
                     keyboardType="numeric"
                     placeholder="10"
                     placeholderTextColor={muted}
+                    returnKeyType="next"
                   />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -672,6 +748,8 @@ export default function MealDetailsScreen() {
                     keyboardType="numeric"
                     placeholder="4"
                     placeholderTextColor={muted}
+                    returnKeyType="done"
+                    onSubmitEditing={() => Keyboard.dismiss()}
                   />
                 </View>
               </View>
@@ -747,7 +825,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   heroImage: {
-    height: 180,
+    height: 320,
     width: '100%',
     borderRadius: 16,
     borderWidth: 1,

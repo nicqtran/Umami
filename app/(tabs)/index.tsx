@@ -1,12 +1,14 @@
-import { useFonts, Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
-import { StatusBar } from 'expo-status-bar';
-import { Image } from 'expo-image';
-import { SafeAreaView, ScrollView, StyleSheet, Text, View, Pressable, Dimensions, FlatList, Alert } from 'react-native';
+import { GoalsState, subscribeGoals } from '@/state/goals';
+import { MealEntry, addMeal, getDaysAgoId, subscribeMeals } from '@/state/meals';
+import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { subscribeMeals, MealEntry, addMeal } from '@/state/meals';
+import { useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Dimensions, Easing, FlatList, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 type Macro = { label: string; value: string; color: string };
 type Meal = { id: string; name: string; time: string; calories: string; macros: string; image: number | { uri: string } };
@@ -27,6 +29,15 @@ const macroAccents: Record<'carbs' | 'protein' | 'fat', string> = {
 
 const formatKcal = (value: number) => value.toLocaleString('en-US');
 
+// Helper to get day label from days ago
+const getDayLabel = (daysAgo: number): string => {
+  if (daysAgo === 0) return 'Today';
+  if (daysAgo === 1) return 'Yesterday';
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toLocaleDateString('en-US', { weekday: 'short' });
+};
+
 export default function HomeScreen() {
   const { width } = Dimensions.get('window');
   const cardWidth = useMemo(() => width * 0.86, [width]);
@@ -34,16 +45,27 @@ export default function HomeScreen() {
   const itemSize = cardWidth + cardSpacing * 2;
   const spacerSize = useMemo(() => Math.max(0, width / 2 - (cardWidth / 2 + cardSpacing)), [width, cardWidth, cardSpacing]);
 
-  const placeholderGoal = 2100;
+  // Subscribe to goals state for daily calorie goal
+  const [goals, setGoals] = useState<GoalsState | null>(null);
+  
+  useEffect(() => {
+    const unsubscribe = subscribeGoals(setGoals);
+    return () => unsubscribe();
+  }, []);
+
+  // Use calorie goal from goals state, fallback to default
+  const dailyCalorieGoal = goals?.dailyCalorieGoal ?? 2100;
+  
+  // Generate day metadata with ISO date IDs
   const initialDayMeta: Array<{ id: string; label: string }> = useMemo(
     () => [
-      { id: 'today', label: 'Today' },
-      { id: 'yesterday', label: 'Yesterday' },
-      { id: 'mon', label: 'Mon' },
-      { id: 'sun', label: 'Sun' },
-      { id: 'sat', label: 'Sat' },
-      { id: 'fri', label: 'Fri' },
-      { id: 'thu', label: 'Thu' },
+      { id: getDaysAgoId(0), label: 'Today' },
+      { id: getDaysAgoId(1), label: 'Yesterday' },
+      { id: getDaysAgoId(2), label: getDayLabel(2) },
+      { id: getDaysAgoId(3), label: getDayLabel(3) },
+      { id: getDaysAgoId(4), label: getDayLabel(4) },
+      { id: getDaysAgoId(5), label: getDayLabel(5) },
+      { id: getDaysAgoId(6), label: getDayLabel(6) },
     ],
     [],
   );
@@ -77,9 +99,10 @@ export default function HomeScreen() {
         { label: 'Protein', value: `${Math.round(macrosTotal.protein)}g`, color: macroAccents.protein },
         { label: 'Fat', value: `${Math.round(macrosTotal.fat)}g`, color: macroAccents.fat },
       ];
-      return { id: meta.id, label: meta.label, calories: Math.round(macrosTotal.calories), goal: placeholderGoal, macros };
+      // Use goal from goals state
+      return { id: meta.id, label: meta.label, calories: Math.round(macrosTotal.calories), goal: dailyCalorieGoal, macros };
     });
-  }, [initialDayMeta, meals]);
+  }, [initialDayMeta, meals, dailyCalorieGoal]);
 
   const reversedDays = useMemo(() => [...days].reverse(), [days]);
   const initialIndex = reversedDays.length - 1;
@@ -104,66 +127,233 @@ export default function HomeScreen() {
 
   const listRef = useRef<FlatList<any>>(null);
   const router = useRouter();
+  const scrollXRef = useRef(0);
+  const isScrollingRef = useRef(false);
 
-  const handleSnapMeal = useCallback(async () => {
+  // Camera action sheet and scanning state
+  const [showCameraSheet, setShowCameraSheet] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanningMessage, setScanningMessage] = useState('');
+  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
+  const [isPickerActive, setIsPickerActive] = useState(false);
+  const scanPulse = useRef(new Animated.Value(1)).current;
+  const scanProgress = useRef(new Animated.Value(0)).current;
+  const sheetSlideAnim = useRef(new Animated.Value(0)).current;
+  const mealsFadeAnim = useRef(new Animated.Value(0)).current;
+
+  // Scanning messages that rotate during analysis
+  const scanningMessages = [
+    'Analyzing your meal...',
+    'Detecting ingredients...',
+    'Calculating nutrition...',
+    'Identifying food items...',
+    'Processing image...',
+    'Scanning for nutrients...',
+    'Recognizing portions...',
+    'Almost there...',
+  ];
+
+  // Start scanning animation
+  const startScanAnimation = useCallback(() => {
+    // Pulse animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanPulse, {
+          toValue: 1.1,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanPulse, {
+          toValue: 1,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    // Progress animation
+    Animated.timing(scanProgress, {
+      toValue: 1,
+      duration: 2500,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    }).start();
+  }, [scanPulse, scanProgress]);
+
+  // Rotate scanning messages
+  useEffect(() => {
+    if (!isScanning) return;
+    
+    let messageIndex = 0;
+    setScanningMessage(scanningMessages[0]);
+    
+    const interval = setInterval(() => {
+      messageIndex = (messageIndex + 1) % scanningMessages.length;
+      setScanningMessage(scanningMessages[messageIndex]);
+    }, 800);
+
+    return () => clearInterval(interval);
+  }, [isScanning]);
+
+  // Process the captured image and create meal
+  const processImage = useCallback(async (imageUri: string) => {
+    setCapturedImageUri(imageUri);
+    setIsScanning(true);
+    scanProgress.setValue(0);
+    startScanAnimation();
+
+    // Simulate AI processing delay (2.5 seconds)
+    await new Promise(resolve => setTimeout(resolve, 2500));
+
+    // Get active day from current state
+    const currentActiveDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
+    const dayId = currentActiveDay?.id || getDaysAgoId(0);
+
+    // Create the meal
+    const newMealId = `${Date.now()}`;
+    const now = new Date();
+    const newMeal: MealEntry = {
+      id: newMealId,
+      dayId,
+      name: 'Scanned meal',
+      time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+      image: { uri: imageUri },
+      foods: [],
+    };
+    addMeal(newMeal);
+
+    // Reset scanning state
+    setIsScanning(false);
+    setCapturedImageUri(null);
+    scanPulse.setValue(1);
+    scanProgress.setValue(0);
+
+    // Navigate to meal details
+    router.push({ pathname: '/meal-details', params: { dayId, mealId: newMealId } });
+  }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse]);
+
+  // Smooth sheet close animation
+  const closeSheetWithAnimation = useCallback(() => {
+    return new Promise<void>((resolve) => {
+      Animated.timing(sheetSlideAnim, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start(() => {
+        setShowCameraSheet(false);
+        resolve();
+      });
+    });
+  }, [sheetSlideAnim]);
+
+  // Handle taking a photo with camera
+  const handleTakePhoto = useCallback(async () => {
+    if (isPickerActive) return;
+    setIsPickerActive(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // Smooth close animation
+    await closeSheetWithAnimation();
+
+    // Brief delay for modal to fully dismiss
+    await new Promise(resolve => setTimeout(resolve, 200));
+
     try {
-      const cameraAvailable = await ImagePicker.isAvailableAsync();
-      if (cameraAvailable) {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!permission.granted) {
-          return;
-        }
-        const result = await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.8,
-        });
-        if (result.canceled) return;
-        const asset = result.assets?.[0];
-        if (!asset?.uri) return;
-        const newMealId = `${Date.now()}`;
-        const now = new Date();
-        const newMeal: MealEntry = {
-          id: newMealId,
-          dayId: 'today',
-          name: 'New meal',
-          time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
-          image: { uri: asset.uri },
-          foods: [],
-        };
-        addMeal(newMeal);
-        router.push({ pathname: '/meal-details', params: { dayId: 'today', mealId: newMealId } });
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        setIsPickerActive(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        Alert.alert('Permission needed', 'Allow camera access to snap a meal.');
         return;
       }
 
-      // Fallback for simulators: allow selecting from library so flow still works
-      const libPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!libPermission.granted) {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      setIsPickerActive(false);
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Smooth transition to loading state
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await processImage(result.assets[0].uri);
+      }
+    } catch (err: any) {
+      setIsPickerActive(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Camera Error', 'Could not access camera. Please try again.');
+    }
+  }, [processImage, isPickerActive, closeSheetWithAnimation]);
+
+  // Handle choosing from library
+  const handleChooseFromLibrary = useCallback(async () => {
+    if (isPickerActive) return;
+    setIsPickerActive(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // Smooth close animation
+    await closeSheetWithAnimation();
+
+    // Brief delay for modal to fully dismiss
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        setIsPickerActive(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         Alert.alert('Permission needed', 'Allow photo library access to add a meal.');
         return;
       }
+
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         quality: 0.8,
+        allowsEditing: false,
       });
-      if (result.canceled) return;
-      const asset = result.assets?.[0];
-      if (!asset?.uri) return;
-      const newMealId = `${Date.now()}`;
-      const now = new Date();
-      const newMeal: MealEntry = {
-        id: newMealId,
-        dayId: 'today',
-        name: 'New meal',
-        time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
-        image: { uri: asset.uri },
-        foods: [],
-      };
-      addMeal(newMeal);
-      router.push({ pathname: '/meal-details', params: { dayId: 'today', mealId: newMealId } });
+
+      setIsPickerActive(false);
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Smooth transition to loading state
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await processImage(result.assets[0].uri);
+      }
     } catch (err: any) {
-      Alert.alert('Camera unavailable', 'Camera is not available on this device. Please use a real device or pick a photo.');
+      setIsPickerActive(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Library Error', 'Could not access photo library. Please try again.');
     }
-  }, [router]);
+  }, [processImage, isPickerActive, closeSheetWithAnimation]);
+
+  // Open camera action sheet with animation
+  const handleSnapMeal = useCallback(() => {
+    if (isPickerActive || showCameraSheet) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowCameraSheet(true);
+    sheetSlideAnim.setValue(0);
+    Animated.spring(sheetSlideAnim, {
+      toValue: 1,
+      damping: 20,
+      mass: 0.8,
+      stiffness: 100,
+      useNativeDriver: true,
+    }).start();
+  }, [isPickerActive, showCameraSheet, sheetSlideAnim]);
+
+  // Reset sheet animation when closed
+  useEffect(() => {
+    if (!showCameraSheet) {
+      sheetSlideAnim.setValue(0);
+    }
+  }, [showCameraSheet, sheetSlideAnim]);
 
   const getItemLayout = (_: unknown, index: number) => {
     const item = carouselData[index];
@@ -176,6 +366,17 @@ export default function HomeScreen() {
     const unsubscribe = subscribeMeals(setMeals);
     return () => unsubscribe();
   }, []);
+
+  // Animate meals list when active day changes
+  useEffect(() => {
+    mealsFadeAnim.setValue(0);
+    Animated.timing(mealsFadeAnim, {
+      toValue: 1,
+      duration: 300,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [activeIndex, mealsFadeAnim]);
 
   const activeDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
   const currentMeals = meals
@@ -199,7 +400,7 @@ export default function HomeScreen() {
         image: meal.image,
       };
     });
-  const remainingCalories = Math.max((activeDay?.goal || placeholderGoal) - (activeDay?.calories || 0), 0);
+  const remainingCalories = Math.max((activeDay?.goal || dailyCalorieGoal) - (activeDay?.calories || 0), 0);
 
   const [fontsLoaded] = useFonts({
     Inter_300Light,
@@ -220,7 +421,15 @@ export default function HomeScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <Text style={[styles.brand, titleFont]}>Umami</Text>
-          <Pressable style={styles.avatar} onPress={() => router.push('/profile')}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.avatar,
+              pressed && { opacity: 0.7, transform: [{ scale: 0.95 }] }
+            ]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/profile');
+            }}>
             <Text style={[styles.avatarText, semiFont]}>U</Text>
           </Pressable>
         </View>
@@ -233,17 +442,50 @@ export default function HomeScreen() {
               keyExtractor={(item) => item.id}
               horizontal
               showsHorizontalScrollIndicator={false}
-              snapToInterval={itemSize}
-              snapToAlignment="center"
-              snapToOffsets={snapOffsets}
               decelerationRate="fast"
-              pagingEnabled
-              disableIntervalMomentum
+              disableIntervalMomentum={true}
               initialScrollIndex={initialIndex + 1}
               getItemLayout={getItemLayout}
               contentContainerStyle={styles.summaryCarousel}
+              bounces={false}
+              scrollEventThrottle={16}
+              onScrollBeginDrag={() => {
+                isScrollingRef.current = true;
+              }}
+              onScroll={(event) => {
+                scrollXRef.current = event.nativeEvent.contentOffset.x;
+              }}
+              onScrollEndDrag={(event) => {
+                const offsetX = event.nativeEvent.contentOffset.x;
+                const velocity = event.nativeEvent.velocity?.x || 0;
+
+                // Find closest snap point
+                let targetIndex = daySnapOffsets.reduce(
+                  (closest, offset, idx) => {
+                    const currentDiff = Math.abs(offsetX - offset);
+                    const closestDiff = Math.abs(offsetX - daySnapOffsets[closest]);
+                    return currentDiff < closestDiff ? idx : closest;
+                  },
+                  0,
+                );
+
+                // Adjust for velocity - if fast swipe, go to next/prev
+                if (Math.abs(velocity) > 0.5) {
+                  if (velocity < 0 && targetIndex < daySnapOffsets.length - 1) {
+                    targetIndex = targetIndex + 1;
+                  } else if (velocity > 0 && targetIndex > 0) {
+                    targetIndex = targetIndex - 1;
+                  }
+                }
+
+                const targetOffset = daySnapOffsets[targetIndex] ?? 0;
+                listRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+                setActiveIndex(targetIndex);
+              }}
               onMomentumScrollEnd={(event) => {
                 const offsetX = event.nativeEvent.contentOffset.x;
+
+                // Find closest snap point
                 const closestIndex = daySnapOffsets.reduce(
                   (closest, offset, idx) => {
                     const currentDiff = Math.abs(offsetX - offset);
@@ -252,11 +494,16 @@ export default function HomeScreen() {
                   },
                   0,
                 );
+
                 const targetOffset = daySnapOffsets[closestIndex] ?? 0;
-                if (Math.abs(offsetX - targetOffset) > 0.5) {
+
+                // Only force snap if we're off by more than 1 pixel
+                if (Math.abs(offsetX - targetOffset) > 1) {
                   listRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
                 }
+
                 setActiveIndex(closestIndex);
+                isScrollingRef.current = false;
               }}
               renderItem={({ item: day }) => {
                 if (day.spacer) {
@@ -299,7 +546,6 @@ export default function HomeScreen() {
                   </View>
                 );
               }}
-              scrollEventThrottle={16}
             />
             <View style={styles.pagination}>
               {reversedDays.map((day, index) => (
@@ -314,7 +560,7 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <View style={styles.mealsSection}>
+          <Animated.View style={[styles.mealsSection, { opacity: mealsFadeAnim }]}>
             <View style={styles.mealsHeader}>
               <Text style={[styles.sectionTitle, semiFont]}>{`${activeDay?.label || 'Today'}'s meals`}</Text>
               <View style={styles.remainingPill}>
@@ -325,13 +571,17 @@ export default function HomeScreen() {
               {currentMeals.map((meal) => (
                 <Pressable
                   key={meal.id}
-                  style={styles.mealCard}
-                  onPress={() =>
+                  style={({ pressed }) => [
+                    styles.mealCard,
+                    pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] }
+                  ]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     router.push({
                       pathname: '/meal-details',
                       params: { dayId: activeDay?.id, mealId: meal.id },
-                    })
-                  }>
+                    });
+                  }}>
                   <Image source={meal.image} style={styles.mealThumb} contentFit="cover" />
                   <View style={styles.mealContent}>
                     <Text style={[styles.mealName, semiFont]} numberOfLines={1}>
@@ -349,7 +599,7 @@ export default function HomeScreen() {
                 </Pressable>
               ))}
             </View>
-          </View>
+          </Animated.View>
         </ScrollView>
 
         <View style={styles.snapContainer}>
@@ -358,6 +608,149 @@ export default function HomeScreen() {
             <Text style={[styles.snapLabel, semiFont]}>Snap a meal</Text>
           </Pressable>
         </View>
+
+        {/* Camera Action Sheet Modal */}
+        <Modal
+          visible={showCameraSheet}
+          transparent
+          animationType="none"
+          onRequestClose={async () => {
+            await closeSheetWithAnimation();
+          }}
+        >
+          <Animated.View
+            style={[
+              styles.sheetBackdrop,
+              {
+                opacity: sheetSlideAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 1],
+                }),
+              }
+            ]}
+          >
+            <Pressable
+              style={styles.sheetBackdropTouchable}
+              onPress={async () => {
+                if (!isPickerActive) {
+                  await closeSheetWithAnimation();
+                }
+              }}
+            />
+            <Animated.View
+              style={[
+                styles.sheetContainer,
+                {
+                  transform: [{
+                    translateY: sheetSlideAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [400, 0],
+                    }),
+                  }],
+                }
+              ]}
+            >
+              <View style={styles.sheetHandle} />
+              <Text style={[styles.sheetTitle, semiFont]}>Add a meal</Text>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.sheetOption,
+                  pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] },
+                  isPickerActive && { opacity: 0.5 }
+                ]}
+                onPress={handleTakePhoto}
+                disabled={isPickerActive}
+              >
+                <View style={styles.sheetIconContainer}>
+                  <MaterialCommunityIcons name="camera" size={24} color={accent} />
+                </View>
+                <View style={styles.sheetOptionContent}>
+                  <Text style={[styles.sheetOptionTitle, semiFont]}>Take Photo</Text>
+                  <Text style={[styles.sheetOptionSubtitle, bodyFont]}>Use your camera to snap a meal</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={muted} />
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.sheetOption,
+                  pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] },
+                  isPickerActive && { opacity: 0.5 }
+                ]}
+                onPress={handleChooseFromLibrary}
+                disabled={isPickerActive}
+              >
+                <View style={styles.sheetIconContainer}>
+                  <MaterialCommunityIcons name="image-multiple" size={24} color={accent} />
+                </View>
+                <View style={styles.sheetOptionContent}>
+                  <Text style={[styles.sheetOptionTitle, semiFont]}>Choose from Library</Text>
+                  <Text style={[styles.sheetOptionSubtitle, bodyFont]}>Select a photo from your gallery</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color={muted} />
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.sheetCancelButton,
+                  pressed && { opacity: 0.7, transform: [{ scale: 0.98 }] },
+                  isPickerActive && { opacity: 0.5 }
+                ]}
+                onPress={async () => {
+                  if (!isPickerActive) {
+                    await closeSheetWithAnimation();
+                  }
+                }}
+                disabled={isPickerActive}
+              >
+                <Text style={[styles.sheetCancelText, semiFont]}>Cancel</Text>
+              </Pressable>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
+        {/* Scanning Overlay Modal */}
+        <Modal
+          visible={isScanning}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {}}
+        >
+          <View style={styles.scanningOverlay}>
+            <View style={styles.scanningCard}>
+              {/* Preview Image */}
+              {capturedImageUri && (
+                <Animated.View style={[styles.scanningImageContainer, { transform: [{ scale: scanPulse }] }]}>
+                  <Image source={{ uri: capturedImageUri }} style={styles.scanningImage} contentFit="cover" />
+                  <View style={styles.scanningImageOverlay} />
+                </Animated.View>
+              )}
+              
+              {/* Scanning Animation */}
+              <View style={styles.scanningContent}>
+                <ActivityIndicator size="large" color={accent} style={styles.scanningSpinner} />
+                <Text style={[styles.scanningTitle, semiFont]}>Analyzing Your Meal</Text>
+                <Text style={[styles.scanningMessage, bodyFont]}>{scanningMessage}</Text>
+                
+                {/* Progress Bar */}
+                <View style={styles.progressBarContainer}>
+                  <Animated.View 
+                    style={[
+                      styles.progressBar, 
+                      { 
+                        width: scanProgress.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: ['0%', '100%'],
+                        })
+                      }
+                    ]} 
+                  />
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -375,8 +768,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    paddingBottom: 16,
   },
   brand: {
     fontSize: 22,
@@ -385,14 +779,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderColor: border,
-    borderWidth: 1,
+    borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
   avatarText: {
     color: text,
@@ -400,23 +799,28 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   scroll: {
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-    gap: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 120,
+    gap: 28,
   },
   summaryCard: {
     backgroundColor: card,
-    borderRadius: 14,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: border,
-    padding: 20,
-    gap: 12,
+    padding: 24,
+    gap: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    elevation: 2,
   },
   summaryWrapper: {
     alignItems: 'center',
-    gap: 10,
-    marginHorizontal: -16,
-    paddingHorizontal: 16,
+    gap: 14,
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
   },
   summaryCarousel: {
     paddingHorizontal: 0,
@@ -438,27 +842,31 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   caloriesBlock: {
-    gap: 4,
+    gap: 6,
+    paddingVertical: 4,
   },
   calories: {
-    fontSize: 30,
+    fontSize: 32,
     color: text,
     fontWeight: '700',
-    letterSpacing: 0.2,
+    letterSpacing: -0.5,
+    lineHeight: 38,
   },
   caloriesSub: {
     fontSize: 14,
     color: muted,
     marginTop: 2,
+    letterSpacing: 0.1,
   },
   macrosRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 14,
+    paddingTop: 6,
   },
   macroItem: {
     flex: 1,
-    gap: 4,
+    gap: 6,
   },
   macroDot: {
     width: 8,
@@ -488,21 +896,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 6,
+    gap: 7,
     alignSelf: 'center',
-    marginTop: 8,
+    marginTop: 10,
+    paddingVertical: 4,
   },
   dotIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#C9CCD1',
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#D1D4D8',
+    opacity: 0.6,
   },
   dotIndicatorActive: {
     backgroundColor: '#111418',
+    width: 20,
+    borderRadius: 3.5,
+    opacity: 1,
   },
   mealsSection: {
-    gap: 10,
+    gap: 16,
   },
   mealsHeader: {
     flexDirection: 'row',
@@ -510,51 +923,63 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 18,
     color: text,
     fontWeight: '600',
-    letterSpacing: 0.2,
+    letterSpacing: -0.3,
   },
   remainingPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: '#EAF3FF',
+    shadowColor: '#1B4F9C',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 1,
   },
   remainingText: {
     fontSize: 12.5,
     color: '#1B4F9C',
     fontWeight: '600',
+    letterSpacing: 0.1,
   },
   mealsList: {
-    gap: 12,
+    gap: 14,
   },
   mealCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 16,
     backgroundColor: card,
     borderColor: border,
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 16,
+    padding: 18,
     minHeight: 110,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 1,
   },
   mealThumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
+    width: 64,
+    height: 64,
+    borderRadius: 14,
     backgroundColor: '#F1F2F5',
   },
   mealContent: {
     flex: 1,
-    gap: 6,
+    gap: 7,
     justifyContent: 'center',
   },
   mealName: {
     fontSize: 17,
     color: text,
     fontWeight: '600',
+    letterSpacing: -0.2,
   },
   mealMeta: {
     flexDirection: 'row',
@@ -581,9 +1006,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 16,
-    paddingBottom: 18,
-    paddingTop: 10,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    paddingTop: 16,
     backgroundColor: 'transparent',
   },
   snapButton: {
@@ -592,17 +1017,178 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     backgroundColor: accent,
-    borderRadius: 16,
-    paddingVertical: 16,
+    borderRadius: 18,
+    paddingVertical: 18,
+    shadowColor: accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 6,
   },
   snapPressed: {
-    opacity: 0.9,
+    opacity: 0.92,
+    transform: [{ scale: 0.98 }],
   },
   snapLabel: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
   },
+
+  // Camera Action Sheet Styles
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheetBackdropTouchable: {
+    flex: 1,
+  },
+  sheetContainer: {
+    backgroundColor: card,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 12,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  sheetTitle: {
+    fontSize: 20,
+    color: text,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: background,
+    borderRadius: 16,
+    marginBottom: 12,
+    gap: 16,
+  },
+  sheetIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: 'rgba(44, 62, 80, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetOptionContent: {
+    flex: 1,
+    gap: 4,
+  },
+  sheetOptionTitle: {
+    fontSize: 16,
+    color: text,
+    fontWeight: '600',
+  },
+  sheetOptionSubtitle: {
+    fontSize: 13,
+    color: muted,
+  },
+  sheetCancelButton: {
+    backgroundColor: background,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  sheetCancelText: {
+    fontSize: 16,
+    color: muted,
+    fontWeight: '600',
+  },
+
+  // Scanning Overlay Styles
+  scanningOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  scanningCard: {
+    backgroundColor: card,
+    borderRadius: 28,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  scanningImageContainer: {
+    width: 180,
+    height: 180,
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: 24,
+    shadowColor: accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  scanningImage: {
+    width: '100%',
+    height: '100%',
+  },
+  scanningImageOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(44, 62, 80, 0.1)',
+  },
+  scanningContent: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  scanningSpinner: {
+    marginBottom: 16,
+  },
+  scanningTitle: {
+    fontSize: 20,
+    color: text,
+    fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  scanningMessage: {
+    fontSize: 14,
+    color: muted,
+    textAlign: 'center',
+    marginBottom: 20,
+    minHeight: 20,
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 4,
+    backgroundColor: border,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: accent,
+    borderRadius: 2,
+  },
+
   titleLoaded: {
     fontFamily: 'Inter_700Bold',
   },

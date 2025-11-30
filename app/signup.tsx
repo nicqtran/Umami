@@ -1,13 +1,16 @@
+import { updateUserProfile } from '@/state/user';
+import { supabase } from '@/lib/supabase';
 import {
-  useFonts,
   Inter_300Light,
   Inter_400Regular,
   Inter_500Medium,
   Inter_600SemiBold,
   Inter_700Bold,
+  useFonts,
 } from '@expo-google-fonts/inter';
-import { StatusBar } from 'expo-status-bar';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import {
   Alert,
@@ -19,7 +22,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Image } from 'expo-image';
 
 const background = '#f5f6fa';
 const navy = '#2f3c46';
@@ -40,15 +42,33 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [focused, setFocused] = useState<null | 'name' | 'email' | 'password'>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const canProceed = email.trim().length > 0 && password.trim().length >= 8;
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (!canProceed) {
       Alert.alert('Add details', 'Please enter an email and an 8+ character password.');
       return;
     }
-    router.replace('/(tabs)');
+    try {
+      setSubmitting(true);
+      const { error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password: password.trim(),
+      });
+      if (error) {
+        Alert.alert('Sign up failed', error.message);
+        return;
+      }
+      updateUserProfile({
+        name: name.trim() || 'Friend',
+        email: email.trim(),
+      });
+      router.replace('/onboarding-flow');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const titleFont = fontsLoaded ? styles.titleLoaded : null;
@@ -59,8 +79,8 @@ export default function SignUpScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" backgroundColor={background} />
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.card}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+          <View style={styles.card}>
           <View style={styles.illustrationWrap}>
             <Image
               source={require('@/assets/images/umami logo.png')}
@@ -79,6 +99,7 @@ export default function SignUpScreen() {
               placeholderTextColor="#88939e"
               onFocus={() => setFocused('name')}
               onBlur={() => setFocused(null)}
+              returnKeyType="next"
               style={[
                 styles.input,
                 focused === 'name' && styles.inputFocused,
@@ -98,6 +119,7 @@ export default function SignUpScreen() {
               autoComplete="email"
               onFocus={() => setFocused('email')}
               onBlur={() => setFocused(null)}
+              returnKeyType="next"
               style={[
                 styles.input,
                 focused === 'email' && styles.inputFocused,
@@ -111,15 +133,17 @@ export default function SignUpScreen() {
               <TextInput
                 value={password}
                 onChangeText={setPassword}
-              placeholder="Password"
-              placeholderTextColor="#88939e"
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-              onFocus={() => setFocused('password')}
-              onBlur={() => setFocused(null)}
-              style={[
-                styles.passwordInput,
-                focused === 'password' && styles.inputFocused,
+                placeholder="Password"
+                placeholderTextColor="#88939e"
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                onFocus={() => setFocused('password')}
+                onBlur={() => setFocused(null)}
+                returnKeyType="done"
+                onSubmitEditing={handleNext}
+                style={[
+                  styles.passwordInput,
+                  focused === 'password' && styles.inputFocused,
                 bodyFont,
               ]}
             />
@@ -143,9 +167,10 @@ export default function SignUpScreen() {
             .
           </Text>
 
-          <Pressable
-            onPress={handleNext}
-            style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
+            <Pressable
+              onPress={submitting ? undefined : handleNext}
+              disabled={submitting}
+              style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed, submitting && styles.ctaDisabled]}>
             <Text style={[styles.ctaLabel, titleFont]}>Next</Text>
           </Pressable>
 
@@ -276,6 +301,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 4,
+  },
+  ctaDisabled: {
+    opacity: 0.6,
   },
   ctaPressed: {
     transform: [{ scale: 0.98 }],
