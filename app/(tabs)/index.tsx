@@ -462,20 +462,17 @@ export default function HomeScreen() {
 
     activeDay.macros.forEach((macro) => {
       if (!macroBarAnims[macro.label]) {
-        macroBarAnims[macro.label] = new Animated.Value(macro.percentage);
-        return; // First time, no animation needed
+        macroBarAnims[macro.label] = new Animated.Value(0);
       }
 
-      // Stop any ongoing animation, then animate from current value to new value
-      macroBarAnims[macro.label].stopAnimation();
       Animated.timing(macroBarAnims[macro.label], {
         toValue: macro.percentage,
-        duration: 400,
-        easing: Easing.inOut(Easing.quad),
+        duration: 450,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: false,
       }).start();
     });
-  }, [activeDay?.id]); // Only trigger when day ID changes
+  }, [activeDay, macroBarAnims]);
 
   const currentMeals = meals
     .filter((meal) => meal.dayId === activeDay?.id)
@@ -518,7 +515,11 @@ export default function HomeScreen() {
       <StatusBar style="dark" backgroundColor={background} />
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={[styles.brand, titleFont]}>Umami</Text>
+          <Image
+            source={require('@/assets/images/umami logo.png')}
+            style={styles.headerLogo}
+            contentFit="contain"
+          />
           <Pressable
             style={({ pressed }) => [
               styles.avatar,
@@ -658,11 +659,6 @@ export default function HomeScreen() {
                       <Animated.View pointerEvents="none" style={[styles.cardGlow, { opacity: glowOpacity }]} />
                       <View style={styles.summaryTop}>
                         <Text style={[styles.summaryLabel, semiFont]}>{daySummary.label.toUpperCase()}</Text>
-                        <Image
-                          source={require('@/assets/images/image-trimmed.png')}
-                          style={styles.summaryThumb}
-                          contentFit="cover"
-                        />
                       </View>
                       <View style={styles.caloriesBlock}>
                         <Text style={[styles.calories, titleFont]}>
@@ -932,11 +928,9 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     paddingBottom: 16,
   },
-  brand: {
-    fontSize: 22,
-    color: text,
-    letterSpacing: 0.2,
-    fontWeight: '700',
+  headerLogo: {
+    width: 36,
+    height: 36,
   },
   avatar: {
     width: 40,
@@ -1000,18 +994,12 @@ const styles = StyleSheet.create({
   summaryTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
   },
   summaryLabel: {
     fontSize: 12,
     letterSpacing: 1,
     color: muted,
     fontWeight: '600',
-  },
-  summaryThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
   },
   caloriesBlock: {
     gap: 6,

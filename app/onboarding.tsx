@@ -8,7 +8,6 @@ import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 import { supabase } from '@/lib/supabase';
 
-// Required for web browser auth to complete properly
 WebBrowser.maybeCompleteAuthSession();
 
 const background = '#f5f6fa';
@@ -22,59 +21,29 @@ export default function OnboardingScreen() {
     Inter_700Bold,
   });
 
-  // Handle Google Sign-In
   const handleGoogleSignIn = async () => {
     try {
       setGoogleLoading(true);
-      
-      const redirectUri = makeRedirectUri({
-        scheme: 'umami',
-        path: 'auth/callback',
-      });
-
+      const redirectUri = makeRedirectUri({ scheme: 'umami', path: 'auth/callback' });
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo: redirectUri,
-          skipBrowserRedirect: true,
-        },
+        options: { redirectTo: redirectUri, skipBrowserRedirect: true },
       });
-
-      if (error) {
-        Alert.alert('Error', error.message);
-        return;
-      }
-
-      if (!data.url) {
-        Alert.alert('Error', 'Could not get authentication URL');
-        return;
-      }
-
-      const result = await WebBrowser.openAuthSessionAsync(
-        data.url,
-        redirectUri,
-        { showInRecents: true }
-      );
-
+      if (error) { Alert.alert('Error', error.message); return; }
+      if (!data.url) { Alert.alert('Error', 'Could not get authentication URL'); return; }
+      
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUri, { showInRecents: true });
       if (result.type === 'success' && result.url) {
         const url = new URL(result.url);
         const params = new URLSearchParams(url.hash.substring(1));
-        
         const accessToken = params.get('access_token');
         const refreshToken = params.get('refresh_token');
-
         if (accessToken) {
           const { error: sessionError } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken || '',
           });
-
-          if (sessionError) {
-            Alert.alert('Error', sessionError.message);
-            return;
-          }
-
-          // Navigate to onboarding flow for new users or main app
+          if (sessionError) { Alert.alert('Error', sessionError.message); return; }
           router.replace('/(tabs)');
         }
       }
