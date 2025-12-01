@@ -1,6 +1,7 @@
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { analyzeFoodImage } from '@/services/food-analysis';
 import { GoalsState, subscribeGoals } from '@/state/goals';
-import { addMeal, getDaysAgoId, MealEntry, subscribeMeals } from '@/state/meals';
+import { addMeal, FoodItem, getDaysAgoId, MealEntry, subscribeMeals } from '@/state/meals';
 import { subscribeUserProfile, UserProfile } from '@/state/user';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -270,9 +271,6 @@ export default function HomeScreen() {
     scanProgress.setValue(0);
     startScanAnimation();
 
-    // Simulate AI processing delay (2.5 seconds)
-    await new Promise(resolve => setTimeout(resolve, 2500));
-
     // Get active day from current state
     const currentActiveDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
     const dayId = currentActiveDay?.id || getDaysAgoId(0);
@@ -287,24 +285,49 @@ export default function HomeScreen() {
       return;
     }
 
+    // Analyze the food image using Gemini AI
+    const analysisResult = await analyzeFoodImage(imageUri);
+    
     const now = new Date();
+    let mealName = 'Scanned meal';
+    let foods: Omit<FoodItem, 'id'>[] = [];
+    
+    if (analysisResult.success) {
+      mealName = analysisResult.mealName || 'Scanned meal';
+      foods = analysisResult.foods;
+    } else {
+      // Show error but still allow manual entry
+      console.warn('Food analysis failed:', analysisResult.error);
+      // Don't block meal creation - user can add foods manually
+    }
+
     const newMealData = {
       dayId,
-      name: 'Scanned meal',
+      name: mealName,
       time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
       image: { uri: imageUri },
-      foods: [],
+      foods,
     };
-    const newMeal = await addMeal(user.id, newMealData);
+    
+    try {
+      const newMeal = await addMeal(user.id, newMealData);
 
-    // Reset scanning state
-    setIsScanning(false);
-    setCapturedImageUri(null);
-    scanPulse.setValue(1);
-    scanProgress.setValue(0);
+      // Reset scanning state
+      setIsScanning(false);
+      setCapturedImageUri(null);
+      scanPulse.setValue(1);
+      scanProgress.setValue(0);
 
-    // Navigate to meal details
-    router.push({ pathname: '/meal-details', params: { dayId, mealId: newMeal.id } });
+      // Navigate to meal details
+      router.push({ pathname: '/meal-details', params: { dayId, mealId: newMeal.id } });
+    } catch (error) {
+      console.error('Failed to save meal:', error);
+      setIsScanning(false);
+      setCapturedImageUri(null);
+      scanPulse.setValue(1);
+      scanProgress.setValue(0);
+      Alert.alert('Error', 'Failed to save meal. Please try again.');
+    }
   }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse, user]);
 
   // Smooth sheet close animation
@@ -545,6 +568,7 @@ export default function HomeScreen() {
       <StatusBar style="dark" backgroundColor={background} />
       <View style={styles.container}>
         <View style={styles.header}>
+          <View style={styles.headerSpacer} />
           <Image
             source={require('@/assets/images/umami logo.png')}
             style={styles.headerLogo}
@@ -1008,8 +1032,13 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   headerLogo: {
-    width: 36,
-    height: 36,
+    width: 52,
+    height: 52,
+    marginTop: -12,
+  },
+  headerSpacer: {
+    width: 40,
+    height: 40,
   },
   avatar: {
     width: 40,

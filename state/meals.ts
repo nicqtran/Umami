@@ -175,7 +175,7 @@ export const addFoodToMeal = async (userId: string, mealId: string, food: Omit<F
 
 export const addMeal = async (
   userId: string,
-  meal: Omit<MealEntry, 'id'> & { foods: Omit<FoodItem, 'id'>[] }
+  meal: Omit<MealEntry, 'id' | 'foods'> & { foods: Omit<FoodItem, 'id'>[] }
 ) => {
   try {
     const imageUri =
