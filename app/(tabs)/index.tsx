@@ -10,13 +10,177 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Easing, FlatList, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Dimensions, Easing, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Reanimated, {
+  cancelAnimation,
+  Easing as ReanimatedEasing,
+  useAnimatedProps,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
 
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 
 type Macro = { label: string; value: string; color: string; current: number; goal: number; percentage: number };
+
+// Premium Animated Macro Bar Component - uses react-native-reanimated for 60 FPS UI thread animations
+const AnimatedMacroBar = React.memo(({ 
+  percentage, 
+  color, 
+  delay = 0,
+  isActive 
+}: { 
+  percentage: number; 
+  color: string; 
+  delay?: number;
+  isActive: boolean;
+}) => {
+  const progress = useSharedValue(0);
+  const prevIsActive = useSharedValue(isActive ? 1 : 0);
+  const hasAnimated = useSharedValue(0);
+  
+  useEffect(() => {
+    const targetPercent = Math.min(Number(percentage) || 0, 100);
+    
+    // Detect when card becomes active (transition from false to true)
+    const justBecameActive = isActive && prevIsActive.value === 0;
+    // Also animate on first mount if already active
+    const shouldAnimateFromZero = justBecameActive || (isActive && hasAnimated.value === 0);
+    
+    prevIsActive.value = isActive ? 1 : 0;
+    
+    if (!isActive) {
+      // For non-active cards, just set the value immediately - cancel any running animation first
+      cancelAnimation(progress);
+      progress.value = targetPercent;
+      hasAnimated.value = 0;
+      return;
+    }
+    
+    if (shouldAnimateFromZero) {
+      // Card just became active - animate from 0
+      hasAnimated.value = 1;
+      cancelAnimation(progress);
+      progress.value = 0; // Explicit reset to 0
+      progress.value = withDelay(delay, withTiming(targetPercent, {
+        duration: 450,
+        easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+      }));
+    } else {
+      // Already active and animated, data changed - animate from current to new
+      progress.value = withTiming(targetPercent, {
+        duration: 300,
+        easing: ReanimatedEasing.out(ReanimatedEasing.quad),
+      });
+    }
+  }, [percentage, isActive, delay]);
+
+  // Animated style for the bar width - runs on UI thread
+  const animatedStyle = useAnimatedStyle(() => ({
+    width: `${Math.max(0, Math.min(progress.value, 100))}%`,
+  }));
+
+  return (
+    <Reanimated.View
+      style={[
+        {
+          height: '100%',
+          borderRadius: 3,
+          backgroundColor: color,
+        },
+        animatedStyle,
+      ]}
+    />
+  );
+});
+
+// Premium Animated Ring Component - uses react-native-reanimated for 60 FPS UI thread animations
+const AnimatedCalorieRing = React.memo(({
+  percentage,
+  isActive,
+  isOverGoal,
+}: {
+  percentage: number;
+  isActive: boolean;
+  isOverGoal: boolean;
+}) => {
+  const progress = useSharedValue(0);
+  const prevIsActive = useSharedValue(isActive ? 1 : 0);
+  const hasAnimated = useSharedValue(0);
+  const circumference = 2 * Math.PI * 46;
+
+  useEffect(() => {
+    const targetPercent = Math.min(Number(percentage) || 0, 100);
+    
+    // Detect when card becomes active (transition from false to true)
+    const justBecameActive = isActive && prevIsActive.value === 0;
+    // Also animate on first mount if already active
+    const shouldAnimateFromZero = justBecameActive || (isActive && hasAnimated.value === 0);
+    
+    prevIsActive.value = isActive ? 1 : 0;
+
+    if (!isActive) {
+      // Non-active cards show static value - cancel any running animation first
+      cancelAnimation(progress);
+      progress.value = targetPercent;
+      hasAnimated.value = 0;
+      return;
+    }
+
+    if (shouldAnimateFromZero) {
+      // Card just became active - animate from 0
+      hasAnimated.value = 1;
+      cancelAnimation(progress);
+      progress.value = 0; // Explicit reset to 0
+      progress.value = withDelay(80, withTiming(targetPercent, {
+        duration: 550,
+        easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+      }));
+    } else {
+      // Already active and animated, data changed - animate from current to new
+      progress.value = withTiming(targetPercent, {
+        duration: 300,
+        easing: ReanimatedEasing.out(ReanimatedEasing.quad),
+      });
+    }
+  }, [percentage, isActive]);
+
+  // Animated props for the SVG circle - runs on UI thread
+  const animatedProps = useAnimatedProps(() => ({
+    strokeDashoffset: circumference - (progress.value / 100) * circumference,
+  }));
+
+  return (
+    <Svg width={110} height={110}>
+      {/* Background circle */}
+      <Circle
+        cx={55}
+        cy={55}
+        r={46}
+        stroke="#EAECEF"
+        strokeWidth={7}
+        fill="none"
+      />
+      {/* Progress circle */}
+      <AnimatedCircle
+        cx={55}
+        cy={55}
+        r={46}
+        stroke={isOverGoal ? '#D4A574' : accent}
+        strokeWidth={7}
+        fill="none"
+        strokeDasharray={`${circumference}`}
+        animatedProps={animatedProps}
+        strokeLinecap="round"
+        transform="rotate(-90 55 55)"
+      />
+    </Svg>
+  );
+});
 type Meal = { id: string; name: string; time: string; calories: string; macros: string; image: number | { uri: string } };
 type DaySummary = { id: string; label: string; calories: number; goal: number; macros: Macro[]; percentage: number };
 
@@ -172,7 +336,7 @@ export default function HomeScreen() {
     return offsets;
   }, [reversedDays.length, spacerSize, itemSize]);
 
-  const listRef = useRef<FlatList<any>>(null);
+  const listRef = useRef<any>(null);
   const router = useRouter();
   const scrollX = useRef(new Animated.Value(0)).current;
   const isAnimatingRef = useRef(false);
@@ -180,8 +344,6 @@ export default function HomeScreen() {
 
   // Animation refs for calorie card entrance
   const cardEntranceAnim = useRef(new Animated.Value(0)).current;
-  const macroBarAnims = useRef<Record<string, Animated.Value>>({}).current;
-  const calorieProgressAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const unsubscribe = subscribeUserProfile(setUserProfile);
@@ -200,12 +362,17 @@ export default function HomeScreen() {
   const mealsFadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(cardEntranceAnim, {
-      toValue: 1,
-      duration: 480,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
+    // Delayed entrance for smoother initial load
+    const entranceTimeout = setTimeout(() => {
+      Animated.spring(cardEntranceAnim, {
+        toValue: 1,
+        damping: 20,
+        stiffness: 180,
+        mass: 0.5,
+        useNativeDriver: true,
+      }).start();
+    }, 50);
+    return () => clearTimeout(entranceTimeout);
   }, [cardEntranceAnim]);
 
   // Scanning messages that rotate during analysis
@@ -335,7 +502,7 @@ export default function HomeScreen() {
     return new Promise<void>((resolve) => {
       Animated.timing(sheetSlideAnim, {
         toValue: 0,
-        duration: 250,
+        duration: 180,
         easing: Easing.bezier(0.25, 0.1, 0.25, 1),
         useNativeDriver: true,
       }).start(() => {
@@ -437,9 +604,9 @@ export default function HomeScreen() {
     sheetSlideAnim.setValue(0);
     Animated.spring(sheetSlideAnim, {
       toValue: 1,
-      damping: 20,
-      mass: 0.8,
-      stiffness: 100,
+      damping: 22,
+      mass: 0.5,
+      stiffness: 180,
       useNativeDriver: true,
     }).start();
   }, [isPickerActive, showCameraSheet, sheetSlideAnim]);
@@ -475,57 +642,13 @@ export default function HomeScreen() {
     mealsFadeAnim.setValue(0);
     Animated.timing(mealsFadeAnim, {
       toValue: 1,
-      duration: 150,
+      duration: 100,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
   }, [activeIndex, mealsFadeAnim]);
 
   const activeDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
-
-  // Animate macro bars - reset to 0 and animate up to target (loading effect)
-  // Include calories in deps so animation triggers when data loads
-  useEffect(() => {
-    if (!activeDay) return;
-
-    activeDay.macros.forEach((macro) => {
-      if (!macroBarAnims[macro.label]) {
-        macroBarAnims[macro.label] = new Animated.Value(0);
-      }
-
-      // Immediately reset to prevent showing stale value from previous day
-      macroBarAnims[macro.label].stopAnimation();
-      macroBarAnims[macro.label].setValue(0);
-      
-      // Start animation to target
-      Animated.timing(macroBarAnims[macro.label], {
-        toValue: macro.percentage,
-        duration: 350,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false,
-      }).start();
-    });
-  }, [activeDay?.id, activeDay?.calories]);
-
-  // Animate calorie ring - reset to 0 and animate up to target (loading effect)
-  // Include calories in deps so animation triggers when data loads
-  useEffect(() => {
-    if (!activeDay) return;
-    
-    const targetPercent = Math.min(activeDay.percentage, 100);
-    
-    // Immediately reset to prevent showing stale value from previous day
-    calorieProgressAnim.stopAnimation();
-    calorieProgressAnim.setValue(0);
-    
-    // Start animation to target
-    Animated.timing(calorieProgressAnim, {
-      toValue: targetPercent,
-      duration: 350,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start();
-  }, [activeDay?.id, activeDay?.calories]);
 
   const currentMeals = meals
     .filter((meal) => meal.dayId === activeDay?.id)
@@ -617,7 +740,7 @@ export default function HomeScreen() {
                 },
               ]}
             >
-              <FlatList
+              <Animated.FlatList
                 ref={listRef}
                 data={carouselData}
                 keyExtractor={(item) => item.id}
@@ -631,10 +754,12 @@ export default function HomeScreen() {
                 scrollEventThrottle={16}
                 snapToOffsets={snapOffsets}
                 snapToAlignment="start"
-                removeClippedSubviews={false}
+                removeClippedSubviews={true}
+                maxToRenderPerBatch={3}
+                windowSize={5}
                 onScroll={Animated.event(
                   [{ nativeEvent: { contentOffset: { x: scrollX } } }],
-                  { useNativeDriver: false }
+                  { useNativeDriver: true }
                 )}
                 onMomentumScrollEnd={(event) => {
                   if (isAnimatingRef.current) return;
@@ -731,37 +856,13 @@ export default function HomeScreen() {
                           
                           {/* Circular Progress - Right */}
                           <View style={styles.progressRingContainer}>
-                            <Svg width={110} height={110} style={styles.progressRingSvg}>
-                              {/* Background circle */}
-                              <Circle
-                                cx={55}
-                                cy={55}
-                                r={46}
-                                stroke="#EAECEF"
-                                strokeWidth={7}
-                                fill="none"
+                            <View style={styles.progressRingSvg}>
+                              <AnimatedCalorieRing
+                                percentage={daySummary.percentage}
+                                isActive={isActiveCard}
+                                isOverGoal={daySummary.percentage >= 100}
                               />
-                              {/* Progress circle */}
-                              <AnimatedCircle
-                                cx={55}
-                                cy={55}
-                                r={46}
-                                stroke={daySummary.percentage >= 100 ? '#D4A574' : accent}
-                                strokeWidth={7}
-                                fill="none"
-                                strokeDasharray={`${2 * Math.PI * 46}`}
-                                strokeDashoffset={
-                                  isActiveCard
-                                    ? calorieProgressAnim.interpolate({
-                                        inputRange: [0, 100],
-                                        outputRange: [2 * Math.PI * 46, 0],
-                                      })
-                                    : 2 * Math.PI * 46 * (1 - Math.min(daySummary.percentage, 100) / 100)
-                                }
-                                strokeLinecap="round"
-                                transform="rotate(-90 55 55)"
-                              />
-                            </Svg>
+                            </View>
                             <View style={styles.progressRingCenter}>
                               <Text style={[styles.progressPercent, titleFont]}>
                                 {Math.round(daySummary.percentage)}
@@ -772,26 +873,18 @@ export default function HomeScreen() {
                         </View>
                       </View>
                       <View style={styles.macrosRow}>
-                        {daySummary.macros.map((item: Macro) => (
+                        {daySummary.macros.map((item: Macro, idx: number) => (
                           <View key={item.label} style={styles.macroItem}>
                             <View style={styles.macroLabelRow}>
                               <View style={[styles.macroDot, { backgroundColor: item.color }]} />
                               <Text style={[styles.macroLabel, bodyFont]}>{item.label}</Text>
                             </View>
                             <View style={styles.macroBarBackground}>
-                              <Animated.View
-                                style={[
-                                  styles.macroBarFill,
-                                  {
-                                    backgroundColor: item.color,
-                                    width: isActiveCard
-                                      ? macroBarAnims[item.label]?.interpolate({
-                                          inputRange: [0, 100],
-                                          outputRange: ['0%', '100%'],
-                                        }) || '0%'
-                                      : `${item.percentage}%`,
-                                  },
-                                ]}
+                              <AnimatedMacroBar
+                                percentage={item.percentage}
+                                color={item.color}
+                                delay={idx * 50}
+                                isActive={isActiveCard}
                               />
                             </View>
                             <Text style={[styles.macroValue, semiFont]}>

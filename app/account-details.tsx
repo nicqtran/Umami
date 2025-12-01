@@ -1,24 +1,33 @@
-import { GoalsState, subscribeGoals, updateGoals, getGoals } from '@/state/goals';
-import { subscribeUserProfile, updateUserProfile, UserProfile, getUserProfile } from '@/state/user';
-import { upsertProfile } from '@/services/profile';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import {
+  areNotificationsEnabled,
+  getMealReminders,
+  MealReminder,
+  requestPermissions,
+  sendTestNotification,
+  setNotificationsEnabled,
+  updateMealReminder,
+} from '@/services/notifications';
+import { upsertProfile } from '@/services/profile';
+import { getGoals, GoalsState, subscribeGoals, updateGoals } from '@/state/goals';
+import { getUserProfile, subscribeUserProfile, updateUserProfile, UserProfile } from '@/state/user';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    Animated,
-    Easing,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  Animated,
+  Easing,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 // Design tokens - matching app aesthetic
@@ -59,6 +68,11 @@ export default function AccountDetailsScreen() {
   const [calendarMonth, setCalendarMonth] = useState<Date>(new Date());
   const [showYearPicker, setShowYearPicker] = useState(false);
 
+  // Notification state
+  const [notificationsEnabled, setNotificationsEnabledState] = useState(false);
+  const [mealReminders, setMealReminders] = useState<MealReminder[]>([]);
+  const [showTimePickerFor, setShowTimePickerFor] = useState<string | null>(null);
+
   // Subscribe to global user state
   useEffect(() => {
     const unsubscribe = subscribeUserProfile(setUserProfile);
@@ -70,6 +84,62 @@ export default function AccountDetailsScreen() {
     const unsubscribe = subscribeGoals(setGoals);
     return () => unsubscribe();
   }, []);
+
+  // Load notification settings
+  useEffect(() => {
+    const loadNotificationSettings = async () => {
+      const enabled = await areNotificationsEnabled();
+      setNotificationsEnabledState(enabled);
+      const reminders = await getMealReminders();
+      setMealReminders(reminders);
+    };
+    loadNotificationSettings();
+  }, []);
+
+  // Handle notification toggle
+  const handleNotificationToggle = useCallback(async () => {
+    if (!notificationsEnabled) {
+      const hasPermission = await requestPermissions();
+      if (!hasPermission) {
+        // Could show an alert here asking user to enable in settings
+        return;
+      }
+      await setNotificationsEnabled(true);
+      setNotificationsEnabledState(true);
+      await sendTestNotification();
+    } else {
+      await setNotificationsEnabled(false);
+      setNotificationsEnabledState(false);
+    }
+  }, [notificationsEnabled]);
+
+  // Handle reminder toggle
+  const handleReminderToggle = useCallback(async (id: string) => {
+    const reminder = mealReminders.find(r => r.id === id);
+    if (reminder) {
+      await updateMealReminder(id, { enabled: !reminder.enabled });
+      setMealReminders(prev => prev.map(r => 
+        r.id === id ? { ...r, enabled: !r.enabled } : r
+      ));
+    }
+  }, [mealReminders]);
+
+  // Handle time change
+  const handleTimeChange = useCallback(async (id: string, hour: number, minute: number) => {
+    await updateMealReminder(id, { hour, minute });
+    setMealReminders(prev => prev.map(r => 
+      r.id === id ? { ...r, hour, minute } : r
+    ));
+    setShowTimePickerFor(null);
+  }, []);
+
+  // Format time for display
+  const formatTime = (hour: number, minute: number) => {
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    const displayMinute = minute.toString().padStart(2, '0');
+    return `${displayHour}:${displayMinute} ${period}`;
+  };
 
   // Calculate age from date of birth
   const calculateAge = (birthDate: Date): number => {
@@ -444,6 +514,79 @@ export default function AccountDetailsScreen() {
               />
             </View>
           </View>
+
+          {/* Notifications Section */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, bodyFont]}>Notifications</Text>
+            
+            <View style={styles.fieldGroup}>
+              {/* Main toggle */}
+              <Animated.View style={createRowStyle(rowAnims[3])}>
+                <Pressable style={styles.row} onPress={handleNotificationToggle}>
+                  <View style={styles.rowLeft}>
+                    <View style={[styles.rowIcon, notificationsEnabled && styles.rowIconActive]}>
+                      <MaterialCommunityIcons 
+                        name={notificationsEnabled ? "bell-ring" : "bell-outline"} 
+                        size={20} 
+                        color={notificationsEnabled ? '#FFFFFF' : COLORS.accent} 
+                      />
+                    </View>
+                    <View style={styles.rowContent}>
+                      <Text style={[styles.rowLabel, lightFont]}>Meal Reminders</Text>
+                      <Text style={[styles.rowValue, bodyFont]}>
+                        {notificationsEnabled ? 'Enabled' : 'Disabled'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={[styles.toggle, notificationsEnabled && styles.toggleActive]}>
+                    <View style={[styles.toggleKnob, notificationsEnabled && styles.toggleKnobActive]} />
+                  </View>
+                </Pressable>
+                <View style={styles.rowDivider} />
+              </Animated.View>
+
+              {/* Individual reminders */}
+              {notificationsEnabled && mealReminders.map((reminder, index) => (
+                <Animated.View key={reminder.id} style={createRowStyle(rowAnims[4])}>
+                  <Pressable style={styles.row} onPress={() => handleReminderToggle(reminder.id)}>
+                    <View style={styles.rowLeft}>
+                      <View style={[styles.rowIconSmall, reminder.enabled && styles.rowIconSmallActive]}>
+                        <MaterialCommunityIcons 
+                          name={
+                            reminder.id === 'breakfast' ? 'food-croissant' :
+                            reminder.id === 'lunch' ? 'food' : 'food-turkey'
+                          } 
+                          size={16} 
+                          color={reminder.enabled ? COLORS.accent : COLORS.textMuted} 
+                        />
+                      </View>
+                      <View style={styles.rowContent}>
+                        <Text style={[styles.rowLabel, lightFont]}>{reminder.label}</Text>
+                        <Pressable 
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            setShowTimePickerFor(reminder.id);
+                          }}
+                          style={styles.timeButton}
+                        >
+                          <Text style={[styles.timeText, bodyFont, !reminder.enabled && styles.timeTextDisabled]}>
+                            {formatTime(reminder.hour, reminder.minute)}
+                          </Text>
+                          <MaterialCommunityIcons name="pencil" size={12} color={COLORS.textMuted} />
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={[styles.checkbox, reminder.enabled && styles.checkboxActive]}>
+                      {reminder.enabled && (
+                        <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
+                      )}
+                    </View>
+                  </Pressable>
+                  {index < mealReminders.length - 1 && <View style={styles.rowDivider} />}
+                </Animated.View>
+              ))}
+            </View>
+          </View>
         </ScrollView>
 
         {/* Premium Date of Birth Calendar Modal */}
@@ -736,6 +879,60 @@ export default function AccountDetailsScreen() {
               </Pressable>
             </Pressable>
           </KeyboardAvoidingView>
+        </Modal>
+
+        {/* Time Picker Modal */}
+        <Modal
+          visible={showTimePickerFor !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowTimePickerFor(null)}
+        >
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowTimePickerFor(null)}>
+            <Pressable style={styles.timePickerCard} onPress={() => {}}>
+              <View style={styles.timePickerHeader}>
+                <Pressable onPress={() => setShowTimePickerFor(null)}>
+                  <Text style={[styles.datePickerCancel, bodyFont]}>Cancel</Text>
+                </Pressable>
+                <Text style={[styles.datePickerTitle, semiFont]}>Set Time</Text>
+                <View style={{ width: 50 }} />
+              </View>
+              
+              <View style={styles.timePickerContent}>
+                {(() => {
+                  const reminder = mealReminders.find(r => r.id === showTimePickerFor);
+                  if (!reminder) return null;
+                  
+                  const hours = Array.from({ length: 24 }, (_, i) => i);
+                  const minutes = [0, 15, 30, 45];
+                  
+                  return (
+                    <View style={styles.timePickerGrid}>
+                      {hours.map(hour => 
+                        minutes.map(minute => {
+                          const isSelected = reminder.hour === hour && reminder.minute === minute;
+                          return (
+                            <Pressable
+                              key={`${hour}-${minute}`}
+                              style={[styles.timeOption, isSelected && styles.timeOptionSelected]}
+                              onPress={() => handleTimeChange(reminder.id, hour, minute)}
+                            >
+                              <Text style={[
+                                styles.timeOptionText,
+                                isSelected && styles.timeOptionTextSelected
+                              ]}>
+                                {formatTime(hour, minute)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })
+                      )}
+                    </View>
+                  );
+                })()}
+              </View>
+            </Pressable>
+          </Pressable>
         </Modal>
       </Animated.View>
     </SafeAreaView>
@@ -1217,5 +1414,123 @@ const styles = StyleSheet.create({
   },
   lightLoaded: {
     fontFamily: 'Inter_300Light',
+  },
+
+  // Toggle styles
+  toggle: {
+    width: 50,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: COLORS.borderLight,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleActive: {
+    backgroundColor: COLORS.accent,
+  },
+  toggleKnob: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  toggleKnobActive: {
+    transform: [{ translateX: 20 }],
+  },
+  rowIconActive: {
+    backgroundColor: COLORS.accent,
+  },
+  rowIconSmall: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: COLORS.accentLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowIconSmallActive: {
+    backgroundColor: 'rgba(44, 62, 80, 0.12)',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxActive: {
+    backgroundColor: COLORS.accent,
+    borderColor: COLORS.accent,
+  },
+  timeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  timeText: {
+    fontSize: 17,
+    color: COLORS.text,
+    fontWeight: '500',
+  },
+  timeTextDisabled: {
+    color: COLORS.textMuted,
+  },
+
+  // Time Picker Modal
+  timePickerCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 20,
+    overflow: 'hidden',
+    width: '90%',
+    maxWidth: 360,
+    maxHeight: '70%',
+  },
+  timePickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight,
+  },
+  timePickerContent: {
+    padding: 16,
+  },
+  timePickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+  },
+  timeOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    minWidth: 85,
+    alignItems: 'center',
+  },
+  timeOptionSelected: {
+    backgroundColor: COLORS.accent,
+    borderColor: COLORS.accent,
+  },
+  timeOptionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  timeOptionTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
 });

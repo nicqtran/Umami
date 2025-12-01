@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Animated,
-    Easing,
-    Keyboard,
-    LayoutAnimation,
-    Modal,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    UIManager,
-    View,
+  Animated,
+  Easing,
+  Keyboard,
+  LayoutAnimation,
+  Modal,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  UIManager,
+  View
 } from 'react-native';
 
 // Enable LayoutAnimation on Android
@@ -22,8 +21,9 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-import { deleteMeal as deleteMealFromStore, FoodItem, getMeals, updateMealFoods, updateMealMeta } from '@/state/meals';
+import { useToast } from '@/components/toast-provider';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { addMeal as addMealToStore, deleteMeal as deleteMealFromStore, FoodItem, getMeals, updateMealFoods, updateMealMeta } from '@/state/meals';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Crypto from 'expo-crypto';
@@ -58,6 +58,7 @@ export default function MealDetailsScreen() {
   const navigation = useNavigation();
   const { dayId, mealId } = useLocalSearchParams<{ dayId?: string; mealId?: string }>();
   const { user } = useSupabaseAuth();
+  const { showToast } = useToast();
 
   const [fontsLoaded] = useFonts({
     Inter_300Light,
@@ -265,16 +266,52 @@ export default function MealDetailsScreen() {
     });
   };
 
-  const deleteMeal = () => {
+  const deleteMeal = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     isDeletingRef.current = true; // Prevent sync on navigation
+    
+    // Store backup before deleting
+    const mealBackup = initialMeal ? { ...initialMeal } : null;
+    
     setBreakdownItems([]);
     setCalories('0');
-    if (dayId && mealId && user?.id) {
+    
+    if (dayId && mealId && user?.id && mealBackup) {
       DeviceEventEmitter.emit('mealDeleted', { dayId, mealId });
-      deleteMealFromStore(user.id, mealId);
+      await deleteMealFromStore(user.id, mealId);
+      
+      // Navigate back first
+      router.replace('/(tabs)');
+      
+      // Show undo toast
+      setTimeout(() => {
+        showToast({
+          message: `"${mealBackup.name}" deleted`,
+          type: 'undo',
+          duration: 5000,
+          action: {
+            label: 'Undo',
+            onPress: async () => {
+              try {
+                // Re-add the meal with its foods
+                await addMealToStore(user.id, {
+                  dayId: mealBackup.dayId,
+                  name: mealBackup.name,
+                  time: mealBackup.time,
+                  image: mealBackup.image,
+                  foods: mealBackup.foods.map(({ id, ...food }) => food),
+                });
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              } catch (error) {
+                console.error('Failed to restore meal:', error);
+              }
+            },
+          },
+        });
+      }, 100);
+    } else {
+      router.replace('/(tabs)');
     }
-    router.replace('/(tabs)');
   };
 
   const scaleItemsToCalories = (items: BreakdownItem[], targetCalories: number) => {

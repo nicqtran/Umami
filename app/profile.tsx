@@ -1,7 +1,8 @@
-import { ActivityLevel, BiologicalSex, GoalsState, HeightUnit, subscribeGoals, updateGoals, getGoals } from '@/state/goals';
-import { subscribeUserProfile, updateUserProfile, UserProfile, getUserProfile } from '@/state/user';
-import { upsertProfile } from '@/services/profile';
+import { useStreak } from '@/hooks/useStreak';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { upsertProfile } from '@/services/profile';
+import { ActivityLevel, BiologicalSex, getGoals, GoalsState, HeightUnit, subscribeGoals, updateGoals } from '@/state/goals';
+import { getUserProfile, subscribeUserProfile, updateUserProfile, UserProfile } from '@/state/user';
 import { addWeightEntry } from '@/state/weight-log';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -9,19 +10,19 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
-    ActionSheetIOS,
-    Animated,
-    Dimensions,
-    Easing,
-    Image,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActionSheetIOS,
+  Animated,
+  Dimensions,
+  Easing,
+  Image,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -73,6 +74,9 @@ export default function ProfileScreen() {
   // Global user profile state
   const [userProfile, setUserProfile] = useState<UserProfile>({ name: '' });
   const [showGenderPicker, setShowGenderPicker] = useState(false);
+
+  // Streak tracking
+  const streakData = useStreak();
 
   // Subscribe to global user state
   useEffect(() => {
@@ -410,6 +414,32 @@ export default function ProfileScreen() {
               </View>
             </Pressable>
             <Text style={[styles.heroName, titleFont]}>{userProfile.name || 'Your Name'}</Text>
+            
+            {/* Streak Counter */}
+            <View style={styles.streakContainer}>
+              <View style={styles.streakCard}>
+                <View style={styles.streakIconContainer}>
+                  <Text style={styles.streakEmoji}>🔥</Text>
+                </View>
+                <View style={styles.streakInfo}>
+                  <Text style={[styles.streakCount, titleFont]}>{streakData.currentStreak}</Text>
+                  <Text style={[styles.streakLabel, lightFont]}>
+                    {streakData.currentStreak === 1 ? 'Day Streak' : 'Day Streak'}
+                  </Text>
+                </View>
+                {streakData.isLoggedToday && (
+                  <View style={styles.loggedTodayBadge}>
+                    <MaterialCommunityIcons name="check-circle" size={14} color="#22C55E" />
+                    <Text style={[styles.loggedTodayText, lightFont]}>Today</Text>
+                  </View>
+                )}
+              </View>
+              {streakData.longestStreak > streakData.currentStreak && (
+                <Text style={[styles.bestStreakText, lightFont]}>
+                  Best: {streakData.longestStreak} days
+                </Text>
+              )}
+            </View>
           </Animated.View>
 
           {/* Body Stats - now directly under the profile header */}
@@ -1057,5 +1087,74 @@ const styles = StyleSheet.create({
   genderOptionTextActive: {
     fontWeight: '600',
     color: accent,
+  },
+  // Streak Counter Styles
+  streakContainer: {
+    marginTop: 16,
+    alignItems: 'center',
+    gap: 8,
+  },
+  streakCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: card,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: border,
+    gap: 12,
+    shadowColor: '#FF6B00',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  streakIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 107, 0, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  streakEmoji: {
+    fontSize: 24,
+  },
+  streakInfo: {
+    alignItems: 'flex-start',
+  },
+  streakCount: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: text,
+    letterSpacing: -0.5,
+  },
+  streakLabel: {
+    fontSize: 12,
+    color: muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: -2,
+  },
+  loggedTodayBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginLeft: 'auto',
+  },
+  loggedTodayText: {
+    fontSize: 11,
+    color: '#22C55E',
+    fontWeight: '500',
+  },
+  bestStreakText: {
+    fontSize: 12,
+    color: muted,
+    opacity: 0.7,
   },
 });

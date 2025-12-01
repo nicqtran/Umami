@@ -60,11 +60,21 @@ supabase link --project-ref YOUR_PROJECT_REF
 
 (Find your project ref in your Supabase dashboard URL: `supabase.com/dashboard/project/YOUR_PROJECT_REF`)
 
-#### Step 5: Set the Gemini API key as a secret
+#### Step 5: Set API keys as secrets
 
+**Gemini API Key** (required):
 ```bash
 supabase secrets set GEMINI_API_KEY=your_gemini_api_key_here
 ```
+
+**USDA API Key** (optional, for more accurate nutrition data):
+1. Get a free API key at [USDA FoodData Central](https://fdc.nal.usda.gov/api-key-signup.html)
+2. Set it as a secret:
+```bash
+supabase secrets set USDA_API_KEY=your_usda_api_key_here
+```
+
+The USDA database has 300k+ foods with lab-verified nutrition data. If configured, the AI will look up identified foods in this database for accurate values instead of estimating.
 
 #### Step 6: Deploy the Edge Function
 
