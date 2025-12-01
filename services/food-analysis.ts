@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export type AnalyzedFood = {
   name: string;
@@ -28,7 +28,7 @@ export async function analyzeFoodImage(imageUri: string): Promise<FoodAnalysisRe
   try {
     // Read the image file and convert to base64
     const base64Image = await FileSystem.readAsStringAsync(imageUri, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding: 'base64',
     });
 
     // Determine MIME type from URI
@@ -43,10 +43,11 @@ export async function analyzeFoodImage(imageUri: string): Promise<FoodAnalysisRe
     });
 
     if (error) {
-      console.error('Edge function error:', error);
+      console.error('Edge function error:', JSON.stringify(error, null, 2));
+      console.error('Error context:', error.context);
       return {
         success: false,
-        error: error.message || 'Failed to analyze image',
+        error: `${error.message || 'Failed to analyze image'} (${error.context?.status || 'unknown status'})`,
       };
     }
 

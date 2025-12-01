@@ -3,7 +3,9 @@ import {
     Animated,
     Easing,
     Keyboard,
+    LayoutAnimation,
     Modal,
+    Platform,
     Pressable,
     SafeAreaView,
     ScrollView,
@@ -11,13 +13,20 @@ import {
     Text,
     TextInput,
     TouchableWithoutFeedback,
+    UIManager,
     View,
 } from 'react-native';
+
+// Enable LayoutAnimation on Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 import { deleteMeal as deleteMealFromStore, FoodItem, getMeals, updateMealFoods, updateMealMeta } from '@/state/meals';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Crypto from 'expo-crypto';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -83,7 +92,8 @@ export default function MealDetailsScreen() {
   const [calories, setCalories] = useState(`${initialTotals.caloriesTotal}`);
   const [mealName, setMealName] = useState(initialMeal?.name ?? 'Meal');
   const [showImageModal, setShowImageModal] = useState(false);
-  const [showActions, setShowActions] = useState(false);
+  const [isEditingFoods, setIsEditingFoods] = useState(false);
+  const isDeletingRef = useRef(false);
   const [renaming, setRenaming] = useState(false);
   const [mealNameDraft, setMealNameDraft] = useState(mealName);
   const [editingCalories, setEditingCalories] = useState(false);
@@ -108,6 +118,10 @@ export default function MealDetailsScreen() {
 
   const entrance = useRef(new Animated.Value(0)).current;
   const cardAnims = useRef([...Array(4)].map(() => new Animated.Value(0))).current;
+  
+  // Animation state for removing food items
+  const [removingFoodId, setRemovingFoodId] = useState<string | null>(null);
+  const removeAnim = useRef(new Animated.Value(1)).current;
 
   const [breakdownItems, setBreakdownItems] = useState<BreakdownItem[]>(initialFoods);
 
@@ -204,7 +218,7 @@ export default function MealDetailsScreen() {
 
   const addFood = () => {
     const newItem: BreakdownItem = {
-      id: `${Date.now()}`,
+      id: Crypto.randomUUID(),
       name: 'New food',
       calories: 120,
       protein: 8,
@@ -215,13 +229,47 @@ export default function MealDetailsScreen() {
     const nextItems = [...breakdownItems, newItem];
     const nextTotals = computeTotals(nextItems);
     applySnapshot(nextItems, nextTotals, mealName, true);
-    setShowActions(false);
+  };
+
+  const removeFood = (foodId: string) => {
+    // Prevent double-tap
+    if (removingFoodId) return;
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setRemovingFoodId(foodId);
+    removeAnim.setValue(1);
+    
+    // Premium pop animation: scale down + fade + slight overshoot
+    Animated.parallel([
+      Animated.timing(removeAnim, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.bezier(0.4, 0, 1, 1),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      // Configure smooth slide-up for remaining items
+      LayoutAnimation.configureNext({
+        duration: 280,
+        update: {
+          type: LayoutAnimation.Types.easeInEaseOut,
+          property: LayoutAnimation.Properties.scaleY,
+        },
+      });
+      
+      const nextItems = breakdownItems.filter((item) => item.id !== foodId);
+      const nextTotals = computeTotals(nextItems);
+      applySnapshot(nextItems, nextTotals, mealName, false);
+      setRemovingFoodId(null);
+      removeAnim.setValue(1);
+    });
   };
 
   const deleteMeal = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    isDeletingRef.current = true; // Prevent sync on navigation
     setBreakdownItems([]);
     setCalories('0');
-    setShowActions(false);
     if (dayId && mealId && user?.id) {
       DeviceEventEmitter.emit('mealDeleted', { dayId, mealId });
       deleteMealFromStore(user.id, mealId);
@@ -236,7 +284,7 @@ export default function MealDetailsScreen() {
         // Seed a single aggregate item when the meal has no foods yet
         return [
           {
-            id: `auto-${Date.now()}`,
+            id: Crypto.randomUUID(),
             name: 'Total calories',
             quantity: '1 serving',
             calories: Math.max(0, Math.round(targetCalories)),
@@ -459,6 +507,8 @@ export default function MealDetailsScreen() {
   };
 
   const syncUpdates = useCallback(() => {
+    // Skip sync if meal is being deleted
+    if (isDeletingRef.current) return;
     const current = latestDataRef.current;
     pushSnapshot(current.breakdown, current.totals, current.mealName);
   }, [pushSnapshot]);
@@ -508,6 +558,10 @@ export default function MealDetailsScreen() {
           <View style={styles.header}>
             <Pressable style={styles.backButton} onPress={handleExit}>
               <MaterialCommunityIcons name="arrow-left" size={24} color={text} />
+            </Pressable>
+            <View style={styles.headerSpacer} />
+            <Pressable style={styles.deleteButton} onPress={deleteMeal}>
+              <MaterialCommunityIcons name="trash-can-outline" size={22} color="#D34040" />
             </Pressable>
           </View>
 
@@ -651,26 +705,92 @@ export default function MealDetailsScreen() {
           <Animated.View style={createCardStyle(cardAnims[3])}>
             <View style={styles.sectionHeader}>
               <Text style={[styles.sectionTitle, semiFont]}>Food Items</Text>
-              <Pressable style={styles.fab} onPress={() => setShowActions(true)}>
-                <MaterialCommunityIcons name="pencil-outline" size={18} color={text} />
-              </Pressable>
+              <View style={styles.sectionActions}>
+                <Pressable style={styles.fab} onPress={addFood}>
+                  <MaterialCommunityIcons name="plus" size={20} color={text} />
+                </Pressable>
+                <Pressable 
+                  style={[styles.fab, isEditingFoods && styles.fabActive]} 
+                  onPress={() => setIsEditingFoods(!isEditingFoods)}
+                >
+                  <MaterialCommunityIcons 
+                    name={isEditingFoods ? "check" : "pencil-outline"} 
+                    size={18} 
+                    color={isEditingFoods ? "#fff" : text} 
+                  />
+                </Pressable>
+              </View>
             </View>
             <View style={styles.activitySelector}>
-              {breakdownItems.map((item) => (
-                <Pressable key={item.id} style={styles.activityOption} onPress={() => openFoodEditor(item)}>
-                  <View style={styles.activityContent}>
-                    <Text style={[styles.activityLabel, semiFont]}>{item.name}</Text>
-                    <Text style={[styles.activityDescription, lightFont]}>
-                      {item.quantity} • {item.calories} kcal
-                    </Text>
-                  </View>
-                  <View>
-                    <Text style={[styles.foodMacros, lightFont]}>
-                      P {item.protein}g • C {item.carbs}g • F {item.fat}g
-                    </Text>
-                  </View>
-                </Pressable>
-              ))}
+              {breakdownItems.map((item) => {
+                const isRemoving = removingFoodId === item.id;
+                
+                return (
+                  <Animated.View
+                    key={item.id}
+                    style={isRemoving ? {
+                      opacity: removeAnim,
+                      transform: [
+                        { 
+                          scale: removeAnim.interpolate({
+                            inputRange: [0, 0.5, 1],
+                            outputRange: [0.6, 0.85, 1],
+                          })
+                        },
+                        {
+                          translateX: removeAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [-20, 0],
+                          })
+                        },
+                      ],
+                    } : undefined}
+                  >
+                    <Pressable 
+                      style={[
+                        styles.activityOption,
+                        isRemoving && styles.activityOptionRemoving,
+                      ]} 
+                      onPress={() => !isEditingFoods && !removingFoodId && openFoodEditor(item)}
+                      disabled={!!removingFoodId}
+                    >
+                      {isEditingFoods && (
+                        <Pressable 
+                          style={styles.removeFoodButton}
+                          onPress={() => removeFood(item.id)}
+                          disabled={!!removingFoodId}
+                        >
+                          <MaterialCommunityIcons 
+                            name="minus-circle" 
+                            size={24} 
+                            color={removingFoodId ? "#ccc" : "#D34040"} 
+                          />
+                        </Pressable>
+                      )}
+                      <View style={styles.activityContent}>
+                        <Text style={[styles.activityLabel, semiFont]}>{item.name}</Text>
+                        <Text style={[styles.activityDescription, lightFont]}>
+                          {item.quantity} • {item.calories} kcal
+                        </Text>
+                      </View>
+                      <View>
+                        <Text style={[styles.foodMacros, lightFont]}>
+                          P {item.protein}g • C {item.carbs}g • F {item.fat}g
+                        </Text>
+                      </View>
+                    </Pressable>
+                  </Animated.View>
+                );
+              })}
+              {breakdownItems.length === 0 && (
+                <View style={styles.emptyFoods}>
+                  <Text style={[styles.emptyFoodsText, bodyFont]}>No food items yet</Text>
+                  <Pressable style={styles.addFoodButton} onPress={addFood}>
+                    <MaterialCommunityIcons name="plus" size={18} color="#fff" />
+                    <Text style={[styles.addFoodButtonText, semiFont]}>Add Food</Text>
+                  </Pressable>
+                </View>
+              )}
             </View>
           </Animated.View>
         </ScrollView>
@@ -766,23 +886,6 @@ export default function MealDetailsScreen() {
           </Pressable>
         </Modal>
 
-        <Modal visible={showActions} transparent animationType="fade" onRequestClose={() => setShowActions(false)}>
-          <Pressable style={styles.actionsBackdrop} onPress={() => setShowActions(false)}>
-            <Pressable style={styles.actionsSheet}>
-              <View style={styles.actionsHandle} />
-              <Pressable style={styles.actionItem} onPress={addFood}>
-                <Text style={[styles.actionText, semiFont]}>Add food</Text>
-              </Pressable>
-              <Pressable style={styles.actionItem} onPress={() => setShowImageModal(true)}>
-                <Text style={[styles.actionText, semiFont]}>View photo</Text>
-              </Pressable>
-              <Pressable style={[styles.actionItem, styles.actionDanger]} onPress={deleteMeal}>
-                <Text style={[styles.actionText, styles.actionDangerText, semiFont]}>Delete meal</Text>
-              </Pressable>
-            </Pressable>
-          </Pressable>
-        </Modal>
-
         <Modal visible={showImageModal} transparent animationType="fade" onRequestClose={() => setShowImageModal(false)}>
           <Pressable style={styles.modalBackdrop} onPress={() => setShowImageModal(false)}>
             <Image source={mealImageSource} style={styles.modalImage} contentFit="contain" />
@@ -816,6 +919,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: border,
+  },
+  headerSpacer: {
+    flex: 1,
+  },
+  deleteButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
   },
   scroll: {
     paddingHorizontal: 20,
@@ -942,6 +1058,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 4,
   },
+  sectionActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   fab: {
     height: 36,
     width: 36,
@@ -950,8 +1070,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  fabActive: {
+    backgroundColor: accent,
+  },
   activitySelector: {
     gap: 10,
+  },
+  removeFoodButton: {
+    marginRight: 12,
+  },
+  emptyFoods: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    gap: 16,
+  },
+  emptyFoodsText: {
+    fontSize: 15,
+    color: muted,
+  },
+  addFoodButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: accent,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  addFoodButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   activityOption: {
     backgroundColor: card,
@@ -963,6 +1112,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  activityOptionRemoving: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
   },
   activityContent: {
     flex: 1,
@@ -1054,41 +1207,103 @@ const styles = StyleSheet.create({
   actionsBackdrop: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   actionsSheet: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingBottom: 28,
-    paddingTop: 10,
-    paddingHorizontal: 16,
-    gap: 8,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 40,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 20,
   },
   actionsHandle: {
     alignSelf: 'center',
-    width: 40,
+    width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#D8DBE3',
-    marginBottom: 6,
+    backgroundColor: '#E0E3E9',
+    marginBottom: 16,
+  },
+  actionsTitle: {
+    fontSize: 13,
+    color: muted,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 12,
+    marginLeft: 4,
+  },
+  actionsGroup: {
+    backgroundColor: '#F8F9FB',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  actionsGroupDanger: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   actionItem: {
-    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 14,
+  },
+  actionItemPressed: {
+    backgroundColor: '#ECEEF2',
+  },
+  actionItemDanger: {
+    backgroundColor: 'transparent',
+  },
+  actionItemDangerPressed: {
+    backgroundColor: '#FEE2E2',
+  },
+  actionIconWrapper: {
+    width: 40,
+    height: 40,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    backgroundColor: '#F4F6FA',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  actionIconDanger: {
+    backgroundColor: '#FEE2E2',
+  },
+  actionContent: {
+    flex: 1,
+    gap: 2,
   },
   actionText: {
-    fontSize: 15,
+    fontSize: 16,
     color: text,
     fontWeight: '600',
+    letterSpacing: -0.2,
   },
-  actionDanger: {
-    backgroundColor: '#FFF3F3',
-  },
-  actionDangerText: {
+  actionTextDanger: {
     color: '#D34040',
+  },
+  actionSubtext: {
+    fontSize: 13,
+    color: muted,
+    opacity: 0.8,
+  },
+  actionDivider: {
+    height: 1,
+    backgroundColor: '#E8EAEE',
+    marginLeft: 70,
   },
   modalImage: {
     width: '100%',
