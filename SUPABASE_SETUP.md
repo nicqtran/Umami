@@ -40,7 +40,15 @@ The schema will create:
    - `meals` (newly created)
    - `food_items` (newly created)
 
-### Step 3: Verify RLS Policies
+### Step 3: Create the avatars storage bucket
+
+Profile photos are uploaded to Supabase Storage and the public URL is stored in `profiles.avatar_url`.
+
+1. Go to **Storage** in the Supabase dashboard
+2. Create a new bucket named **avatars**
+3. Enable public access for the bucket (or add an RLS policy that lets users read their own files)
+
+### Step 4: Verify RLS Policies
 
 1. Go to **Authentication** > **Policies** in the left sidebar
 2. Verify each table has policies:

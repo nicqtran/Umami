@@ -1,12 +1,12 @@
-import { GoalsState, subscribeGoals, updateGoals } from '@/state/goals';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { upsertProfile } from '@/services/profile';
+import { getGoals, GoalsState, subscribeGoals, updateGoals } from '@/state/goals';
 import { MealEntry, subscribeMeals } from '@/state/meals';
-import { subscribeUserProfile, UserProfile } from '@/state/user';
+import { getUserProfile, subscribeUserProfile, UserProfile } from '@/state/user';
 import {
   addWeightEntry,
   deleteWeightEntry,
-  getLatestWeight,
-  getWeightStats,
-  initializeSampleData,
+  loadWeightEntriesFromDb,
   subscribeWeightLog,
   updateWeightEntry,
   WeightEntry
@@ -25,9 +25,9 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
+  View
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 
 // Design tokens
@@ -63,45 +63,115 @@ const SPACING = {
 
 type TimeRange = '5D' | '2W' | '1M' | '1Y' | 'YTD' | 'ALL';
 
+// Format a Date as YYYY-MM-DD in local time to avoid timezone drift
+const formatDateLocal = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Get weight data from actual weight log entries
-const getWeightDataForRange = (days: number, weightEntries: WeightEntry[]): { date: Date; weight: number }[] => {
+const getWeightDataForRange = (days: number, weightEntries: WeightEntry[], isAllTime: boolean = false): { date: Date; weight: number }[] => {
+  // Get today's date at midnight (00:00:00) for accurate comparison
   const today = new Date();
-  const startDate = new Date(today);
-  startDate.setDate(startDate.getDate() - days + 1);
-  
-  // Filter entries within the range
+  today.setHours(0, 0, 0, 0);
+  const millisecondsPerDay = 1000 * 60 * 60 * 24;
+
+  // For "ALL" range, use the first entry date as start instead of calculating back 100 years
+  let startDate: Date;
+  if (isAllTime && weightEntries.length > 0) {
+    // Sort entries to find the earliest one - use T00:00:00 to parse as local time
+    const sorted = [...weightEntries].sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
+    startDate = new Date(sorted[0].date + 'T00:00:00');
+  } else {
+    // Calculate start date: for "5D", we want entries from 5 days ago to today (inclusive)
+    // So if today is Nov 30, "5D" should show Nov 26-30 (5 days)
+    // Use milliseconds calculation to properly handle large day ranges
+    startDate = new Date(today.getTime() - ((days - 1) * millisecondsPerDay));
+    startDate.setHours(0, 0, 0, 0); // Ensure midnight
+  }
+
+  console.log('📅 Filtering weight data for range:', {
+    days: isAllTime ? 'ALL' : days,
+    totalEntries: weightEntries.length,
+    startDate: formatDateLocal(startDate),
+    endDate: formatDateLocal(today)
+  });
+
+  // Filter entries within the range (inclusive of both start and end dates)
   const entriesInRange = weightEntries.filter((entry) => {
-    const entryDate = new Date(entry.date);
+    // Parse entry date at midnight for consistent comparison
+    const entryDate = new Date(entry.date + 'T00:00:00');
     return entryDate >= startDate && entryDate <= today;
   });
-  
-  // Sort by date (oldest first)
-  entriesInRange.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  
-  // Convert to chart format
-  return entriesInRange.map((entry) => ({
-    date: new Date(entry.date),
-    weight: entry.weight,
-  }));
+
+  console.log('✅ Actual entries in range:', entriesInRange.length);
+
+  // Sort by date (oldest first) - use T00:00:00 to parse as local time
+  entriesInRange.sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
+
+  // Fill in all days for every range so indicators line up with each calendar day
+  console.log('📊 Filling all days between entries for selected range');
+
+  // Create a map of date -> weight for quick lookup
+  const weightByDate = new Map<string, number>();
+  entriesInRange.forEach((entry) => {
+    weightByDate.set(entry.date, entry.weight);
+  });
+
+  // Fill in all dates in the range
+  const chartData: { date: Date; weight: number }[] = [];
+  let lastKnownWeight: number | null = null;
+  let hasStarted = false; // Track if we've encountered the first logged entry
+
+  // Calculate actual number of days to iterate (start → today, inclusive)
+  const actualDays = Math.floor((today.getTime() - startDate.getTime()) / millisecondsPerDay) + 1;
+
+  // Iterate through each day in the range
+  for (let i = 0; i < actualDays; i++) {
+    // Create a new date by adding i days to the start date using milliseconds for accuracy
+    const currentDate = new Date(startDate.getTime() + i * millisecondsPerDay);
+    const dateStr = formatDateLocal(currentDate);
+
+    // Check if we have an actual weight entry for this date
+    if (weightByDate.has(dateStr)) {
+      const weight = weightByDate.get(dateStr)!;
+      lastKnownWeight = weight;
+      hasStarted = true; // Mark that we've started tracking
+      chartData.push({ date: new Date(currentDate.getTime()), weight });
+    } else if (hasStarted && lastKnownWeight !== null) {
+      // Only carry forward if we've already started (after first logged entry)
+      chartData.push({ date: new Date(currentDate.getTime()), weight: lastKnownWeight });
+    }
+    // Skip days before the first logged entry
+  }
+
+  console.log(`Chart data points: ${chartData.length} (${entriesInRange.length} actual entries)`);
+
+  return chartData;
 };
 
 const RANGE_DAYS: Record<TimeRange, number> = {
   '5D': 5,
   '2W': 14,
-  '1M': 30,
+  '1M': 31,
   '1Y': 365,
-  'YTD': Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 1).getTime()) / (1000 * 60 * 60 * 24)) || 1,
-  'ALL': 730,
+  'YTD': Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 1).getTime()) / (1000 * 60 * 60 * 24)) + 1,
+  'ALL': 36500, // 100 years - effectively unlimited
 };
 
 export default function LogScreen() {
   const router = useRouter();
+  const { user } = useSupabaseAuth();
+  const insets = useSafeAreaInsets();
   const [selectedRange, setSelectedRange] = useState<TimeRange>('1M');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [userProfile, setUserProfile] = useState<UserProfile>({ name: 'there' });
   const [meals, setMeals] = useState<MealEntry[]>([]);
   const [goals, setGoals] = useState<GoalsState | null>(null);
   const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
+  const [savingWeight, setSavingWeight] = useState(false);
   
   // Weight log modal state
   const [showWeightModal, setShowWeightModal] = useState(false);
@@ -130,35 +200,120 @@ export default function LogScreen() {
     return () => unsubscribe();
   }, []);
 
-  // Initialize sample data if no entries exist
+  // Load weight entries from Supabase when user is available
   useEffect(() => {
-    if (weightEntries.length === 0 && goals) {
-      initializeSampleData(goals.startingWeight, goals.currentWeight, 8);
+    if (user?.id) {
+      console.log('🔄 Loading weight entries for user:', user.id);
+      loadWeightEntriesFromDb(user.id)
+        .then((entries) => {
+          console.log('✅ Weight entries loaded from Supabase:', entries.length);
+        })
+        .catch((error) => {
+          console.error('❌ Failed to load weight entries:', error);
+        });
     }
-  }, [goals]);
+  }, [user?.id]);
+
+  const sortedEntries = useMemo(() => {
+    // Use T00:00:00 suffix to parse dates as local time, not UTC
+    const sorted = [...weightEntries].sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
+    console.log('📈 Log Screen - Total weight entries:', sorted.length);
+    return sorted;
+  }, [weightEntries]);
+
+  // Filter out any "future" entries (from timezone bugs) and get the latest valid entry
+  const latestEntryByDate = useMemo(() => {
+    if (weightEntries.length === 0) return null;
+    
+    // Get today's date - filter out entries that are in the "future" due to timezone issues
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const todayMs = today.getTime();
+    
+    const validEntries = weightEntries.filter(e => {
+      const entryMs = new Date(e.date + 'T00:00:00').getTime();
+      return entryMs <= todayMs;
+    });
+    
+    if (validEntries.length === 0) return null;
+    
+    // Use T00:00:00 suffix to parse dates as local time, not UTC
+    return [...validEntries].sort((a, b) => {
+      const dateDiff = new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    })[0];
+  }, [weightEntries]);
+
+  // Get valid entries only (filter out future dates)
+  const validSortedEntries = useMemo(() => {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const todayMs = today.getTime();
+    
+    return sortedEntries.filter(e => {
+      const entryMs = new Date(e.date + 'T00:00:00').getTime();
+      return entryMs <= todayMs;
+    });
+  }, [sortedEntries]);
+
+  const latestEntry = validSortedEntries[validSortedEntries.length - 1];
 
   // Sync latest weight with goals
   useEffect(() => {
-    const latest = getLatestWeight();
-    if (latest && goals && latest.weight !== goals.currentWeight) {
-      updateGoals({ currentWeight: latest.weight });
+    if (latestEntry && goals && latestEntry.weight !== goals.currentWeight) {
+      updateGoals({ currentWeight: latestEntry.weight });
     }
-  }, [weightEntries]);
-  
+  }, [latestEntry, goals]);
+
   const weightData = useMemo(
-    () => getWeightDataForRange(RANGE_DAYS[selectedRange], weightEntries),
-    [selectedRange, weightEntries]
+    () => getWeightDataForRange(RANGE_DAYS[selectedRange], validSortedEntries, selectedRange === 'ALL'),
+    [selectedRange, validSortedEntries]
   );
 
-  const weightStats = useMemo(() => getWeightStats(), [weightEntries]);
+  const weightStats = useMemo(() => {
+    if (validSortedEntries.length === 0) {
+      return {
+        current: null,
+        highest: null,
+        lowest: null,
+        average: null,
+        totalChange: null,
+        entriesCount: 0,
+      };
+    }
+
+    const weights = validSortedEntries.map((e) => e.weight);
+    const current = latestEntryByDate?.weight ?? weights[weights.length - 1];
+    const highest = Math.max(...weights);
+    const lowest = Math.min(...weights);
+    const average = weights.reduce((a, b) => a + b, 0) / weights.length;
+    const startingWeightForChange = goals?.startingWeight ?? weights[0];
+    const totalChange = current - startingWeightForChange;
+
+    return {
+      current,
+      highest,
+      lowest,
+      average: Math.round(average * 10) / 10,
+      totalChange: Math.round(totalChange * 10) / 10,
+      entriesCount: validSortedEntries.length,
+    };
+  }, [validSortedEntries, goals?.startingWeight, latestEntryByDate]);
 
   // Weight entry handlers
   const openAddWeight = () => {
+    const today = new Date();
+    const todayLocal = formatDateLocal(today);
+    console.log('📅 Opening add weight modal:', {
+      rawDate: today.toString(),
+      localDate: todayLocal,
+      utcDate: today.toISOString(),
+    });
     setEditingEntry(null);
     setWeightDraft(goals?.currentWeight?.toString() ?? '175');
-    const today = new Date().toISOString().split('T')[0];
-    setDateDraft(today);
-    setCalendarMonth(new Date());
+    setDateDraft(todayLocal);
+    setCalendarMonth(today);
     setShowWeightModal(true);
   };
 
@@ -166,26 +321,169 @@ export default function LogScreen() {
     setEditingEntry(entry);
     setWeightDraft(entry.weight.toString());
     setDateDraft(entry.date);
-    setCalendarMonth(new Date(entry.date));
+    // Add T00:00:00 to parse as local time, not UTC
+    setCalendarMonth(new Date(entry.date + 'T00:00:00'));
     setShowWeightModal(true);
   };
 
-  const saveWeight = () => {
-    const weight = parseFloat(weightDraft);
-    if (!Number.isFinite(weight) || weight <= 0) return;
-
-    if (editingEntry) {
-      updateWeightEntry(editingEntry.id, { weight, date: dateDraft });
-    } else {
-      addWeightEntry(weight, dateDraft);
-    }
-    setShowWeightModal(false);
+  const syncCurrentWeightToProfile = async (weight: number) => {
+    if (!user?.id) return;
+    console.log('🔄 Syncing weight to profile:', weight);
+    
+    // Update local goals state immediately
+    updateGoals({ currentWeight: weight });
+    
+    // Get latest state for sync
+    const latestGoals = getGoals();
+    const latestProfile = getUserProfile();
+    
+    // Sync to Supabase profiles table
+    await upsertProfile({
+      userId: user.id,
+      name: latestProfile.name,
+      email: latestProfile.email,
+      avatarUrl: latestProfile.avatarUri,
+      age: latestGoals.age,
+      dateOfBirth: latestProfile.dateOfBirth,
+      biologicalSex: latestGoals.biologicalSex,
+      currentWeight: weight,
+      goalWeight: latestGoals.goalWeight,
+      startingWeight: latestGoals.startingWeight,
+      timelineWeeks: latestGoals.timelineWeeks,
+      activityLevel: latestGoals.activityLevel,
+      heightCm: latestGoals.heightCm,
+      heightUnit: latestGoals.heightUnit,
+    });
+    
+    console.log('✅ Profile synced with current weight:', weight);
   };
 
-  const handleDeleteWeight = () => {
-    if (editingEntry) {
-      deleteWeightEntry(editingEntry.id);
+  const saveWeight = async () => {
+    if (!user?.id || savingWeight) {
+      console.log('Save blocked:', { hasUser: !!user?.id, savingWeight });
+      return;
+    }
+
+    const weight = parseFloat(weightDraft);
+    console.log('Attempting to save weight:', { weight, weightDraft, dateToUse: dateDraft });
+
+    if (!Number.isFinite(weight) || weight <= 0) {
+      console.error('Invalid weight value:', weight);
+      return;
+    }
+
+    const dateToUse = dateDraft || formatDateLocal(new Date());
+
+    try {
+      setSavingWeight(true);
+      console.log('Starting save process...', { userId: user.id, weight, date: dateToUse, isEdit: !!editingEntry });
+
+      // Save to Supabase weight_entries table
+      let savedEntry: WeightEntry;
+      if (editingEntry) {
+        console.log('Updating existing entry:', editingEntry.id);
+        const updated = await updateWeightEntry(user.id, editingEntry.id, { weight, date: dateToUse });
+        if (!updated) {
+          throw new Error('Failed to update weight entry - entry not found');
+        }
+        savedEntry = updated;
+      } else {
+        console.log('Adding new entry...');
+        savedEntry = await addWeightEntry(user.id, weight, dateToUse);
+        console.log('Entry added successfully:', savedEntry);
+      }
+
+      // Reload all weight entries from Supabase to ensure we have the latest data
+      console.log('Reloading weight entries from database...');
+      const refreshed = await loadWeightEntriesFromDb(user.id);
+      console.log('Loaded entries:', refreshed.length);
+
+      // Get today's date in local time for comparison
+      const todayLocal = formatDateLocal(new Date());
+      
+      // Find the most recent weight entry by date AND timestamp (not just date)
+      // Sort by date DESC, then by timestamp DESC to get the truly latest entry
+      // Use T00:00:00 suffix to parse dates as local time, not UTC
+      const sortedByDate = [...refreshed].sort((a, b) => {
+        const dateCompare = new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime();
+        if (dateCompare !== 0) return dateCompare;
+        // If same date, use timestamp to get the most recently created/updated
+        return (b.timestamp || 0) - (a.timestamp || 0);
+      });
+      
+      const latest = sortedByDate[0];
+
+      console.log('📊 Today (local):', todayLocal);
+      console.log('📊 All entries dates:', refreshed.map(e => e.date));
+      console.log('📊 Latest entry after sort:', latest?.date, latest?.weight);
+      console.log('📊 Entry we just saved:', savedEntry.date, savedEntry.weight);
+
+      // Determine which weight to use for profile:
+      // 1. If we saved for today, use today's weight
+      // 2. Otherwise, find the entry for today or the most recent entry that's not in the future
+      let entryToUse = savedEntry;
+      
+      if (savedEntry.date !== todayLocal) {
+        // We saved for a different day, check if there's an entry for today
+        const todayEntry = refreshed.find(e => e.date === todayLocal);
+        if (todayEntry) {
+          entryToUse = todayEntry;
+        } else {
+          // Use the most recent entry that is today or earlier (skip future dates from timezone bugs)
+          const todayMs = new Date(todayLocal + 'T00:00:00').getTime();
+          const validEntries = sortedByDate.filter(e => new Date(e.date + 'T00:00:00').getTime() <= todayMs);
+          entryToUse = validEntries[0] || savedEntry;
+        }
+      }
+      
+      console.log('🔄 Using entry for profile sync:', entryToUse.date, entryToUse.weight);
+      await syncCurrentWeightToProfile(entryToUse.weight);
+      console.log('✅ Profile synced successfully');
+
       setShowWeightModal(false);
+      console.log('Save complete!');
+    } catch (err: any) {
+      console.error('❌ Failed to save weight entry:', err);
+      console.error('Error details:', {
+        message: err?.message,
+        code: err?.code,
+        details: err?.details,
+        hint: err?.hint,
+      });
+      alert(`Failed to save weight: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setSavingWeight(false);
+    }
+  };
+
+  const handleDeleteWeight = async () => {
+    if (!user?.id || !editingEntry) return;
+
+    try {
+      setSavingWeight(true);
+
+      // Delete from Supabase weight_entries table
+      await deleteWeightEntry(user.id, editingEntry.id);
+
+      // Reload all weight entries from Supabase
+      const refreshed = await loadWeightEntriesFromDb(user.id);
+
+      // Find the most recent weight entry by date
+      // Use T00:00:00 suffix to parse dates as local time, not UTC
+      const refreshedLatest = refreshed.sort(
+        (a, b) => new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime()
+      )[0];
+
+      // Update profile's current_weight with the new latest entry (or leave as is if no entries)
+      if (refreshedLatest) {
+        await syncCurrentWeightToProfile(refreshedLatest.weight);
+      }
+
+      setShowWeightModal(false);
+    } catch (err) {
+      console.error('Failed to delete weight entry', err);
+    } finally {
+      setSavingWeight(false);
     }
   };
 
@@ -231,7 +529,7 @@ export default function LogScreen() {
         )}
 
         {/* Weight Trend Graph */}
-        <WeightGraph data={weightData} onPointPress={openEditWeight} entries={weightEntries} />
+        <WeightGraph data={weightData} onPointPress={openEditWeight} entries={validSortedEntries} />
 
         {/* Segmented Range Selector */}
         <SegmentedControl
@@ -240,7 +538,7 @@ export default function LogScreen() {
         />
 
         {/* Calendar Month View */}
-        <CalendarView currentMonth={currentMonth} onMonthChange={setCurrentMonth} meals={meals} />
+        <CalendarView currentMonth={currentMonth} onMonthChange={setCurrentMonth} meals={meals} weightEntries={weightEntries} />
         
         {/* Spacer for bottom tab bar */}
         <View style={{ height: 100 }} />
@@ -253,7 +551,13 @@ export default function LogScreen() {
         animationType="fade"
         onRequestClose={() => setShowWeightModal(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowWeightModal(false)}>
+        <Pressable
+          style={[
+            styles.modalBackdrop,
+            { paddingTop: insets.top + SPACING.lg, paddingBottom: insets.bottom + SPACING.lg },
+          ]}
+          onPress={() => setShowWeightModal(false)}
+        >
           <Pressable style={styles.weightModalCard} onPress={() => {}}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
@@ -264,7 +568,11 @@ export default function LogScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.modalContent}>
+            <ScrollView
+              contentContainerStyle={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
               {/* Weight Input */}
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Weight (lbs)</Text>
@@ -331,7 +639,7 @@ export default function LogScreen() {
                       const firstDay = new Date(year, month, 1).getDay();
                       const daysInMonth = new Date(year, month + 1, 0).getDate();
                       const today = new Date();
-                      const todayStr = today.toISOString().split('T')[0];
+                      const todayStr = formatDateLocal(today);
                       
                       const days: React.ReactNode[] = [];
                       
@@ -390,7 +698,7 @@ export default function LogScreen() {
                   </View>
                 </View>
               </View>
-            </View>
+            </ScrollView>
 
             <View style={styles.modalActions}>
               {editingEntry && (
@@ -399,11 +707,21 @@ export default function LogScreen() {
                 </Pressable>
               )}
               <View style={{ flex: 1 }} />
-              <Pressable style={styles.cancelButton} onPress={() => setShowWeightModal(false)}>
+              <Pressable style={styles.cancelButton} onPress={() => {
+                Keyboard.dismiss();
+                setShowWeightModal(false);
+              }}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </Pressable>
-              <Pressable style={styles.saveButton} onPress={saveWeight}>
-                <Text style={styles.saveButtonText}>Save</Text>
+              <Pressable 
+                style={[styles.saveButton, savingWeight && { opacity: 0.6 }]} 
+                onPress={() => {
+                  Keyboard.dismiss();
+                  saveWeight();
+                }}
+                disabled={savingWeight}
+              >
+                <Text style={styles.saveButtonText}>{savingWeight ? 'Saving...' : 'Save'}</Text>
               </Pressable>
             </View>
           </Pressable>
@@ -429,11 +747,17 @@ function WeightGraph({
   const { width } = Dimensions.get('window');
   const graphWidth = width - SPACING.lg * 2;
   const graphHeight = 200;
-  const graphPadding = { top: 20, bottom: 20, left: 0, right: 0 };
+  // Generous padding to ensure edge points are fully visible even with extreme weight changes
+  const graphPadding = { top: 24, bottom: 24, left: 16, right: 16 };
   const innerWidth = graphWidth - graphPadding.left - graphPadding.right;
   const innerHeight = graphHeight - graphPadding.top - graphPadding.bottom;
 
   useEffect(() => {
+    console.log('📊 WeightGraph received data:', data.length, 'entries');
+    if (data.length > 0) {
+      console.log('First entry:', data[0]);
+      console.log('Last entry:', data[data.length - 1]);
+    }
     animatedProgress.setValue(0);
     Animated.spring(animatedProgress, {
       toValue: 1,
@@ -442,6 +766,47 @@ function WeightGraph({
       useNativeDriver: true,
     }).start();
   }, [data]);
+
+  // Calculate weight change using actual entries (not graphed data which may have duplicates/filled days)
+  // Get entries that fall within the displayed date range
+  const entriesInDisplayRange = useMemo(() => {
+    if (!entries || entries.length === 0 || data.length === 0) return [];
+    
+    const minDisplayDate = Math.min(...data.map(d => d.date.getTime()));
+    const maxDisplayDate = Math.max(...data.map(d => d.date.getTime()));
+    
+    return entries
+      .filter(entry => {
+        const entryTime = new Date(entry.date + 'T00:00:00').getTime();
+        return entryTime >= minDisplayDate && entryTime <= maxDisplayDate;
+      })
+      // Use T00:00:00 suffix to parse dates as local time, not UTC
+      .sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
+  }, [entries, data]);
+
+  const latestSupabaseEntry = useMemo(() => {
+    if (!entries || entries.length === 0) return null;
+    
+    // Get today's date in local time - filter out any "future" entries (from timezone bugs)
+    const today = new Date();
+    today.setHours(23, 59, 59, 999); // End of today
+    const todayMs = today.getTime();
+    
+    // Filter to only entries on or before today
+    const validEntries = entries.filter(e => {
+      const entryMs = new Date(e.date + 'T00:00:00').getTime();
+      return entryMs <= todayMs;
+    });
+    
+    if (validEntries.length === 0) return null;
+    
+    // Use T00:00:00 suffix to parse dates as local time, not UTC
+    return [...validEntries].sort((a, b) => {
+      const dateDiff = new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    })[0];
+  }, [entries]);
 
   if (data.length === 0) {
     return (
@@ -465,27 +830,47 @@ function WeightGraph({
   const maxWeight = Math.max(...weights) + 1;
   const weightRange = maxWeight - minWeight;
 
-  // Create SVG path with padding
-  const points = data.map((d, i) => {
-    const x = graphPadding.left + (i / Math.max(data.length - 1, 1)) * innerWidth;
+  // Get date range for proper x-axis positioning
+  const dates = data.map((d) => d.date.getTime());
+  const minDate = Math.min(...dates);
+  const maxDate = Math.max(...dates);
+  const dateRange = maxDate - minDate;
+
+  // Create SVG path with padding - use date-based x positioning for accurate representation
+  const points = data.map((d) => {
+    // Use date-based positioning so rightmost point is always at the edge
+    const x = dateRange > 0
+      ? graphPadding.left + ((d.date.getTime() - minDate) / dateRange) * innerWidth
+      : graphPadding.left + innerWidth / 2; // Single point centered
     const y = graphPadding.top + (1 - ((d.weight - minWeight) / weightRange)) * innerHeight;
     return { x, y };
   });
+
+  // Debug: Log first and last points to verify they reach the edges
+  if (points.length > 0) {
+    console.log('📍 Graph points - First:', { x: points[0].x, y: points[0].y, expectedLeftEdge: graphPadding.left });
+    console.log('📍 Graph points - Last:', { x: points[points.length - 1].x, y: points[points.length - 1].y, expectedRightEdge: graphPadding.left + innerWidth });
+    console.log('📍 Weight range:', { min: minWeight, max: maxWeight, range: weightRange });
+  }
 
   const pathData = points.reduce((acc, point, i) => {
     if (i === 0) return `M ${point.x} ${point.y}`;
     return `${acc} L ${point.x} ${point.y}`;
   }, '');
 
-  // Area path for gradient fill
-  const areaPathData = `${pathData} L ${graphPadding.left + innerWidth} ${graphHeight} L ${graphPadding.left} ${graphHeight} Z`;
+  // Area path for gradient fill - use actual first and last point x coordinates
+  const firstX = points[0].x;
+  const lastX = points[points.length - 1].x;
+  const areaPathData = `${pathData} L ${lastX} ${graphHeight} L ${firstX} ${graphHeight} Z`;
 
-  // Compare first entry in period to latest entry in period
-  const firstWeightInPeriod = weights[0];
-  const latestWeightInPeriod = weights[weights.length - 1];
-  const weightChange = latestWeightInPeriod - firstWeightInPeriod;
-  const percentChange = (weightChange / firstWeightInPeriod) * 100;
-  const hasMultipleEntries = data.length > 1;
+  // Use actual entries for comparison: first logged entry vs most recent logged entry in period
+  const firstActualWeight = entriesInDisplayRange.length > 0 ? entriesInDisplayRange[0].weight : weights[0];
+  const latestActualWeight = latestSupabaseEntry?.weight ?? (entriesInDisplayRange.length > 0
+    ? entriesInDisplayRange[entriesInDisplayRange.length - 1].weight
+    : weights[weights.length - 1]);
+  const weightChange = latestActualWeight - firstActualWeight;
+  const percentChange = firstActualWeight > 0 ? (weightChange / firstActualWeight) * 100 : 0;
+  const hasMultipleEntries = entriesInDisplayRange.length > 1;
 
   return (
     <Animated.View
@@ -510,7 +895,7 @@ function WeightGraph({
             Current Weight
           </Text>
           <Text style={[TYPOGRAPHY.hero, { color: COLORS.text, fontSize: 28 }]}>
-            {latestWeightInPeriod.toFixed(1)} lbs
+            {latestActualWeight.toFixed(1)} lbs
           </Text>
         </View>
         <View style={styles.changeContainer}>
@@ -669,10 +1054,12 @@ function CalendarView({
   currentMonth,
   onMonthChange,
   meals,
+  weightEntries,
 }: {
   currentMonth: Date;
   onMonthChange: (date: Date) => void;
   meals: MealEntry[];
+  weightEntries: WeightEntry[];
 }) {
   const screenWidth = Dimensions.get('window').width;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -841,18 +1228,18 @@ function CalendarView({
             transform: [{ translateX }],
           }}
         >
-          <CalendarGrid currentMonth={currentMonth} meals={meals} />
+          <CalendarGrid currentMonth={currentMonth} meals={meals} weightEntries={weightEntries} />
         </Animated.View>
       </View>
     </View>
   );
 }
 
-function CalendarGrid({ currentMonth, meals }: { currentMonth: Date; meals: MealEntry[] }) {
+function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Date; meals: MealEntry[]; weightEntries: WeightEntry[] }) {
   const today = new Date();
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
-  
+
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
   const startingDayOfWeek = firstDay.getDay();
@@ -875,13 +1262,13 @@ function CalendarGrid({ currentMonth, meals }: { currentMonth: Date; meals: Meal
   const getDayIdForDate = (dayNum: number): string => {
     const calendarDate = new Date(year, month, dayNum);
     calendarDate.setHours(0, 0, 0, 0);
-    return calendarDate.toISOString().split('T')[0];
+    return formatDateLocal(calendarDate);
   };
 
   // Compute which days have meal logs based on real meal data
   const daysWithLogs = useMemo(() => {
     const logs = new Set<number>();
-    
+
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
       const dayId = getDayIdForDate(dayNum);
       const hasMeals = meals.some(meal => meal.dayId === dayId);
@@ -889,9 +1276,24 @@ function CalendarGrid({ currentMonth, meals }: { currentMonth: Date; meals: Meal
         logs.add(dayNum);
       }
     }
-    
+
     return logs;
   }, [meals, month, year, daysInMonth]);
+
+  // Compute which days have weight entries
+  const daysWithWeight = useMemo(() => {
+    const weights = new Set<number>();
+
+    for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+      const dateStr = getDayIdForDate(dayNum);
+      const hasWeight = weightEntries.some(entry => entry.date === dateStr);
+      if (hasWeight) {
+        weights.add(dayNum);
+      }
+    }
+
+    return weights;
+  }, [weightEntries, month, year, daysInMonth]);
 
   return (
     <View style={styles.calendarGrid} key={monthKey}>
@@ -915,17 +1317,19 @@ function CalendarGrid({ currentMonth, meals }: { currentMonth: Date; meals: Meal
             day === today.getDate() &&
             month === today.getMonth() &&
             year === today.getFullYear();
-          
+
           const hasLog = daysWithLogs.has(day);
+          const hasWeight = daysWithWeight.has(day);
 
           return (
-            <DayCell 
+            <DayCell
               key={`${monthKey}-${day}`}
-              day={day} 
+              day={day}
               month={month}
               year={year}
-              isToday={isToday} 
-              hasLog={hasLog} 
+              isToday={isToday}
+              hasLog={hasLog}
+              hasWeight={hasWeight}
             />
           );
         })}
@@ -934,18 +1338,20 @@ function CalendarGrid({ currentMonth, meals }: { currentMonth: Date; meals: Meal
   );
 }
 
-function DayCell({ 
-  day, 
+function DayCell({
+  day,
   month,
   year,
-  isToday, 
-  hasLog 
-}: { 
-  day: number; 
+  isToday,
+  hasLog,
+  hasWeight
+}: {
+  day: number;
   month: number;
   year: number;
-  isToday: boolean; 
+  isToday: boolean;
   hasLog: boolean;
+  hasWeight: boolean;
 }) {
   const router = useRouter();
 
@@ -953,11 +1359,14 @@ function DayCell({
     const selectedDate = new Date(year, month, day);
     selectedDate.setHours(0, 0, 0, 0);
 
-    const dayId = selectedDate.toISOString().split('T')[0];
+    const dayId = formatDateLocal(selectedDate);
+    
+    console.log('📅 Calendar tap - navigating to:', dayId);
 
+    // Pass the date string directly to avoid timezone issues
     router.push({
       pathname: '/day-details',
-      params: { date: selectedDate.toISOString(), dayId }
+      params: { date: dayId, dayId }
     });
   };
 
@@ -976,10 +1385,17 @@ function DayCell({
           >
             {day}
           </Text>
-          {/* Log dot inside the circle for today, or below for other days */}
+          {/* Log dot inside the circle for today */}
           {hasLog && isToday && <View style={styles.logDotInside} />}
+          {/* Weight indicator inside the circle for today */}
+          {hasWeight && isToday && !hasLog && <View style={styles.weightDotInside} />}
         </View>
+        {/* Log dot below for other days */}
         {hasLog && !isToday && <View style={styles.logDot} />}
+        {/* Weight indicator below for other days */}
+        {hasWeight && !isToday && (
+          <View style={[styles.weightDot, hasLog && styles.weightDotWithLog]} />
+        )}
       </Pressable>
     </View>
   );
@@ -1059,11 +1475,10 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: SPACING.lg,
-    paddingTop: 240,
-    paddingBottom: SPACING.lg,
+    paddingVertical: SPACING.lg,
   },
   modalCard: {
     backgroundColor: COLORS.card,
@@ -1151,6 +1566,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     width: '100%',
     maxWidth: 380,
+    maxHeight: '85%',
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
@@ -1406,6 +1822,27 @@ const styles = StyleSheet.create({
   logDotInside: {
     position: 'absolute',
     bottom: 4,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+  },
+  weightDot: {
+    position: 'absolute',
+    bottom: 4,
+    right: 8,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: COLORS.accent,
+  },
+  weightDotWithLog: {
+    right: 16,
+  },
+  weightDotInside: {
+    position: 'absolute',
+    bottom: 4,
+    right: 6,
     width: 4,
     height: 4,
     borderRadius: 2,

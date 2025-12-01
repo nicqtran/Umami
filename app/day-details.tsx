@@ -1,4 +1,6 @@
 import { deleteMeal, MealEntry, subscribeMeals } from '@/state/meals';
+import { loadWeightEntriesFromDb, subscribeWeightLog, WeightEntry } from '@/state/weight-log';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -43,13 +45,16 @@ const SPACING = {
 
 export default function DayDetailsScreen() {
   const router = useRouter();
+  const { user } = useSupabaseAuth();
   const params = useLocalSearchParams<{ date: string; dayId?: string }>();
   const [meals, setMeals] = useState<MealEntry[]>([]);
+  const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
   
   // Parse the date from params
   const selectedDate = useMemo(() => {
     if (params.date) {
-      return new Date(params.date);
+      // Add T00:00:00 to parse as local time, not UTC
+      return new Date(params.date + 'T00:00:00');
     }
     return new Date();
   }, [params.date]);
@@ -82,6 +87,59 @@ export default function DayDetailsScreen() {
     const unsubscribe = subscribeMeals(setMeals);
     return () => unsubscribe();
   }, []);
+
+  // Subscribe to weight entries
+  useEffect(() => {
+    const unsubscribe = subscribeWeightLog(setWeightEntries);
+    return () => unsubscribe();
+  }, []);
+
+  // Load weight entries from Supabase when user is available
+  useEffect(() => {
+    if (user?.id) {
+      console.log('📊 Day details - Loading weight entries from Supabase for user:', user.id);
+      loadWeightEntriesFromDb(user.id)
+        .then((entries) => {
+          console.log('✅ Day details - Loaded', entries.length, 'weight entries from Supabase');
+          console.log('📊 Entries:', entries.map(e => ({ date: e.date, weight: e.weight })));
+        })
+        .catch((error) => {
+          console.error('❌ Day details - Failed to load weight entries:', error);
+        });
+    }
+  }, [user?.id]);
+
+  // Get weight for the selected date - use the MOST RECENT entry for that day
+  const dayWeight = useMemo(() => {
+    if (!params.date) {
+      return null;
+    }
+    
+    const searchDate = params.date.trim();
+    console.log('📅 Day details - Looking for weight on:', searchDate);
+    
+    // Find ALL entries matching the date
+    const matchingEntries = weightEntries.filter(e => e.date === searchDate || e.date.trim() === searchDate);
+    
+    if (matchingEntries.length === 0) {
+      console.log('❌ No weight entry for:', searchDate);
+      return null;
+    }
+    
+    // Sort by timestamp (most recent first) to get the latest entry for this day
+    const sortedEntries = matchingEntries.sort((a, b) => {
+      // Use timestamp if available, otherwise fall back to comparing by order
+      const timestampA = a.timestamp || 0;
+      const timestampB = b.timestamp || 0;
+      return timestampB - timestampA; // Descending - most recent first
+    });
+    
+    const mostRecentEntry = sortedEntries[0];
+    console.log('✅ Found', matchingEntries.length, 'entries for', searchDate);
+    console.log('✅ Most recent weight:', mostRecentEntry.weight, '(timestamp:', mostRecentEntry.timestamp, ')');
+    
+    return mostRecentEntry.weight;
+  }, [weightEntries, params.date]);
 
   // Filter meals for the selected day
   const dayMeals = useMemo(() => {
@@ -149,7 +207,8 @@ export default function DayDetailsScreen() {
   }, []);
 
   const handleDeleteMeal = (mealId: string) => {
-    deleteMeal(mealId);
+    if (!user?.id) return;
+    deleteMeal(user.id, mealId);
   };
 
   const handleEditMeal = (mealId: string) => {
@@ -190,6 +249,34 @@ export default function DayDetailsScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          {/* Weight Card (if logged) */}
+          {dayWeight !== null && (
+            <Animated.View
+              style={[
+                styles.weightCard,
+                {
+                  opacity: totalsAnim,
+                  transform: [
+                    {
+                      translateY: totalsAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [20, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.weightIconContainer}>
+                <MaterialCommunityIcons name="scale-bathroom" size={24} color={COLORS.accent} />
+              </View>
+              <View style={styles.weightInfo}>
+                <Text style={styles.weightLabel}>Weight</Text>
+                <Text style={styles.weightValue}>{dayWeight.toFixed(1)} lbs</Text>
+              </View>
+            </Animated.View>
+          )}
+
           {/* Daily Totals Card */}
           <Animated.View
             style={[
@@ -478,6 +565,43 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: SPACING.lg,
+  },
+  weightCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 16,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  weightIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: COLORS.accentLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: SPACING.md,
+  },
+  weightInfo: {
+    flex: 1,
+  },
+  weightLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: COLORS.textMuted,
+    marginBottom: 2,
+  },
+  weightValue: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: COLORS.text,
+    letterSpacing: -0.5,
   },
   totalsCard: {
     backgroundColor: COLORS.card,

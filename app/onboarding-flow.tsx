@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -106,7 +107,7 @@ export default function OnboardingFlowScreen() {
   const [timeline, setTimeline] = useState<number | null>(null);
   const [activity, setActivity] = useState<ActivityLevel | null>(null);
   const [saving, setSaving] = useState(false);
-  const { user } = useSupabaseAuth();
+  const { user, loading: authLoading } = useSupabaseAuth();
 
   // Calculate age from birthday
   const calculateAge = useCallback((birthDate: Date): number => {
@@ -225,8 +226,15 @@ export default function OnboardingFlowScreen() {
     if (currentStepIndex < STEPS.length - 1) {
       setCurrentStepIndex((prev) => prev + 1);
     } else {
+      // Wait for auth to finish loading
+      if (authLoading) {
+        Alert.alert('Please wait', 'Loading your session...');
+        return;
+      }
+
       if (!user?.id) {
         Alert.alert('Not signed in', 'Please sign in again before completing onboarding.');
+        router.replace('/login');
         return;
       }
       if (saving) return;
@@ -243,16 +251,7 @@ export default function OnboardingFlowScreen() {
         const day = String(birthdayDate.getDate()).padStart(2, '0');
         const dateOfBirth = `${year}-${month}-${day}`;
 
-        updateGoals({
-          startingWeight: weightNum,
-          currentWeight: weightNum,
-          goalWeight: goalWeightNum,
-          timelineWeeks: timeline!,
-          activityLevel: activity!,
-          age: ageNum,
-          biologicalSex: sex!,
-        });
-
+        // Update local state first
         updateUserProfile({
           age: ageNum,
           currentWeight: weightNum,
@@ -261,6 +260,18 @@ export default function OnboardingFlowScreen() {
           biologicalSex: sex!,
         });
 
+        updateGoals({
+          startingWeight: weightNum,
+          currentWeight: weightNum,
+          goalWeight: goalWeightNum,
+          timelineWeeks: timeline!,
+          activityLevel: activity!,
+          age: ageNum,
+          biologicalSex: sex!,
+          heightCm: 175, // Default height for now
+        });
+
+        // Save to Supabase
         const profile = getUserProfile();
         await upsertProfile({
           userId: user.id,
@@ -276,6 +287,7 @@ export default function OnboardingFlowScreen() {
           activityLevel: activity!,
         });
 
+        // Navigate after successful save
         router.replace('/(tabs)');
       } catch (error: any) {
         console.error('Failed to save profile', error);
@@ -284,7 +296,7 @@ export default function OnboardingFlowScreen() {
         setSaving(false);
       }
     }
-  }, [currentStepIndex, buildBirthday, calculateAge, sex, weight, goalWeight, timeline, activity, router, saving, user]);
+  }, [currentStepIndex, buildBirthday, calculateAge, sex, weight, goalWeight, timeline, activity, router, saving, user, authLoading]);
 
   // Go back
   const handleBack = useCallback(() => {

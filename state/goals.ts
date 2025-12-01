@@ -4,6 +4,7 @@ export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'ver
 // Gender options for BMR calculation - non-binary and prefer-not-to-say use average of male/female formulas
 export type BiologicalSex = 'male' | 'female' | 'non-binary' | 'prefer-not-to-say';
 export type HeightUnit = 'cm' | 'inches';
+export type GoalType = 'loss' | 'maintenance' | 'gain';
 
 export type GoalsState = {
   // User inputs
@@ -16,10 +17,11 @@ export type GoalsState = {
   heightUnit: HeightUnit; // display preference
   age: number; // age in years for BMR calculation
   biologicalSex: BiologicalSex; // biological sex for BMR calculation
+  goalType: GoalType; // deficit, maintenance, or surplus plan
+  weeklyTarget: number; // planned rate of change in lbs/week (direction driven by goalType)
 
   // Calculated values (automatically updated)
   totalWeightToLose: number; // lbs (can be negative for gain)
-  weeklyTarget: number; // lbs per week
   dailyTarget: number; // lbs per day
   dailyCalorieDeficit: number; // calories per day (3500 cal = 1 lb)
   bmr: number; // Basal Metabolic Rate (Mifflin-St Jeor)
@@ -42,6 +44,8 @@ export type GoalsInput = {
   heightUnit?: HeightUnit;
   age?: number;
   biologicalSex?: BiologicalSex;
+  goalType?: GoalType;
+  weeklyTarget?: number;
 };
 
 type Listener = (goals: GoalsState) => void;
@@ -81,36 +85,11 @@ const calculateBMR = (weightLbs: number, heightCm: number, age: number, sex: Bio
   return Math.round(10 * weightKg + 6.25 * heightCm - 5 * age + sexAdjustment);
 };
 
-// Helper to calculate all derived values
-const calculateDerivedValues = (
-  startingWeight: number,
-  currentWeight: number,
-  goalWeight: number,
-  timelineWeeks: number,
-  activityLevel: ActivityLevel,
-  heightCm: number,
-  age: number,
-  biologicalSex: BiologicalSex
-): Omit<GoalsState, 'startingWeight' | 'currentWeight' | 'goalWeight' | 'timelineWeeks' | 'activityLevel' | 'heightCm' | 'heightUnit' | 'age' | 'biologicalSex'> => {
-  // Total weight change needed from starting point
+// Progress-only metrics that shift with starting weight changes
+const calculateProgressMetrics = (startingWeight: number, currentWeight: number, goalWeight: number) => {
   const totalWeightToLose = startingWeight - goalWeight;
-  
-  // Remaining weight from current position
   const remainingWeight = currentWeight - goalWeight;
-  
-  // Weekly and daily targets based on timeline
-  const weeklyTarget = timelineWeeks > 0 ? totalWeightToLose / timelineWeeks : 0;
-  const dailyTarget = weeklyTarget / 7;
-  
-  // Calculate BMR and TDEE based on current weight, height, age, sex, and activity level
-  const bmr = calculateBMR(currentWeight, heightCm, age, biologicalSex);
-  const tdee = Math.round(bmr * ACTIVITY_MULTIPLIERS[activityLevel]);
-  
-  // Calorie calculations
-  const dailyCalorieDeficit = Math.round((weeklyTarget * CALORIES_PER_POUND) / 7);
-  const dailyCalorieGoal = Math.max(MIN_SAFE_CALORIES, tdee - dailyCalorieDeficit);
-  
-  // Progress calculation (0-100%)
+
   let progressPercent = 0;
   if (totalWeightToLose !== 0) {
     const weightLost = startingWeight - currentWeight;
@@ -118,34 +97,112 @@ const calculateDerivedValues = (
   } else if (currentWeight === goalWeight) {
     progressPercent = 100;
   }
-  
-  // Remaining weeks based on current progress and weekly target
-  const remainingWeeks = weeklyTarget !== 0 ? Math.ceil(remainingWeight / weeklyTarget) : 0;
-  
-  // Check if on track (within reasonable variance)
-  const expectedWeightLost = (startingWeight - goalWeight) * (progressPercent / 100);
+
+  const expectedWeightLost = totalWeightToLose * (progressPercent / 100);
   const actualWeightLost = startingWeight - currentWeight;
   const variance = Math.abs(actualWeightLost - expectedWeightLost);
   const onTrack = variance <= 2;
-  
-  // Estimated completion date
-  const completionDate = new Date();
-  completionDate.setDate(completionDate.getDate() + Math.max(0, remainingWeeks * 7));
-  const estimatedCompletionDate = completionDate.toISOString().split('T')[0];
-  
+
   return {
     totalWeightToLose: Math.round(totalWeightToLose * 10) / 10,
-    weeklyTarget: Math.round(weeklyTarget * 100) / 100,
+    progressPercent: Math.round(progressPercent * 10) / 10,
+    remainingWeight: Math.round(remainingWeight * 10) / 10,
+    onTrack,
+  };
+};
+
+// Calorie plan based on Mifflin-St Jeor and user goal type/weekly rate (never uses starting weight)
+const calculateCaloriePlan = (
+  currentWeight: number,
+  goalWeight: number,
+  weeklyTarget: number,
+  goalType: GoalType,
+  activityLevel: ActivityLevel,
+  heightCm: number,
+  age: number,
+  biologicalSex: BiologicalSex
+) => {
+  const planGoalType: GoalType = goalType ?? 'maintenance';
+  const targetRate = Math.max(0, weeklyTarget);
+  const dailyTargetRaw = targetRate / 7;
+
+  const bmr = calculateBMR(currentWeight, heightCm, age, biologicalSex);
+  const tdee = Math.round(bmr * ACTIVITY_MULTIPLIERS[activityLevel]);
+  const calorieDelta = targetRate > 0 ? Math.round((targetRate * CALORIES_PER_POUND) / 7) : 0;
+
+  let dailyCalorieGoal = tdee;
+  let dailyCalorieDeficit = 0;
+  let appliedWeeklyTarget = 0;
+  let dailyTarget = 0;
+
+  if (planGoalType === 'loss') {
+    dailyCalorieGoal = Math.max(MIN_SAFE_CALORIES, tdee - calorieDelta);
+    dailyCalorieDeficit = calorieDelta;
+    appliedWeeklyTarget = targetRate;
+    dailyTarget = dailyTargetRaw;
+  } else if (planGoalType === 'gain') {
+    dailyCalorieGoal = tdee + calorieDelta;
+    dailyCalorieDeficit = -calorieDelta;
+    appliedWeeklyTarget = targetRate;
+    dailyTarget = -dailyTargetRaw;
+  } else {
+    dailyCalorieGoal = tdee;
+    dailyCalorieDeficit = 0;
+    appliedWeeklyTarget = 0;
+    dailyTarget = 0;
+  }
+
+  const remainingWeightForPlan = Math.abs(goalWeight - currentWeight);
+  const remainingWeeks = appliedWeeklyTarget > 0 ? Math.ceil(remainingWeightForPlan / appliedWeeklyTarget) : 0;
+  const completionDate = new Date();
+  completionDate.setDate(completionDate.getDate() + Math.max(0, remainingWeeks * 7));
+  // Format as YYYY-MM-DD in local time to avoid timezone drift
+  const year = completionDate.getFullYear();
+  const month = String(completionDate.getMonth() + 1).padStart(2, '0');
+  const day = String(completionDate.getDate()).padStart(2, '0');
+  const estimatedCompletionDate = `${year}-${month}-${day}`;
+
+  return {
+    weeklyTarget: Math.round(appliedWeeklyTarget * 100) / 100,
     dailyTarget: Math.round(dailyTarget * 1000) / 1000,
     dailyCalorieDeficit,
     bmr,
     tdee,
     dailyCalorieGoal,
-    progressPercent: Math.round(progressPercent * 10) / 10,
-    remainingWeight: Math.round(remainingWeight * 10) / 10,
     remainingWeeks: Math.max(0, remainingWeeks),
-    onTrack,
     estimatedCompletionDate,
+  };
+};
+
+// Helper to calculate all derived values
+const calculateDerivedValues = (
+  startingWeight: number,
+  currentWeight: number,
+  goalWeight: number,
+  _timelineWeeks: number,
+  activityLevel: ActivityLevel,
+  heightCm: number,
+  age: number,
+  biologicalSex: BiologicalSex,
+  goalType: GoalType,
+  weeklyTarget: number
+): Omit<
+  GoalsState,
+  | 'startingWeight'
+  | 'currentWeight'
+  | 'goalWeight'
+  | 'timelineWeeks'
+  | 'activityLevel'
+  | 'heightCm'
+  | 'heightUnit'
+  | 'age'
+  | 'biologicalSex'
+  | 'goalType'
+  | 'weeklyTarget'
+> => {
+  return {
+    ...calculateProgressMetrics(startingWeight, currentWeight, goalWeight),
+    ...calculateCaloriePlan(currentWeight, goalWeight, weeklyTarget, goalType, activityLevel, heightCm, age, biologicalSex),
   };
 };
 
@@ -160,7 +217,9 @@ let goals: GoalsState = {
   heightUnit: 'cm',
   age: 30,
   biologicalSex: 'male',
-  ...calculateDerivedValues(180, 175, 165, 12, 'moderate', 175, 30, 'male'),
+  goalType: 'loss',
+  weeklyTarget: 1,
+  ...calculateDerivedValues(180, 175, 165, 12, 'moderate', 175, 30, 'male', 'loss', 1),
 };
 
 const listeners: Set<Listener> = new Set();
@@ -174,17 +233,19 @@ export const getGoals = (): GoalsState => goals;
 
 // Update goals - automatically recalculates all derived values
 export const updateGoals = (updates: GoalsInput): void => {
-  const newStartingWeight = updates.startingWeight ?? goals.startingWeight;
-  const newCurrentWeight = updates.currentWeight ?? goals.currentWeight;
-  const newGoalWeight = updates.goalWeight ?? goals.goalWeight;
-  const newTimelineWeeks = updates.timelineWeeks ?? goals.timelineWeeks;
-  const newActivityLevel = updates.activityLevel ?? goals.activityLevel;
-  const newHeightCm = updates.heightCm ?? goals.heightCm;
-  const newHeightUnit = updates.heightUnit ?? goals.heightUnit;
-  const newAge = updates.age ?? goals.age;
-  const newBiologicalSex = updates.biologicalSex ?? goals.biologicalSex;
-  
-  // Recalculate all derived values
+  const prevGoals = goals;
+  const newStartingWeight = updates.startingWeight ?? prevGoals.startingWeight;
+  const newCurrentWeight = updates.currentWeight ?? prevGoals.currentWeight;
+  const newGoalWeight = updates.goalWeight ?? prevGoals.goalWeight;
+  const newTimelineWeeks = updates.timelineWeeks ?? prevGoals.timelineWeeks;
+  const newActivityLevel = updates.activityLevel ?? prevGoals.activityLevel;
+  const newHeightCm = updates.heightCm ?? prevGoals.heightCm;
+  const newHeightUnit = updates.heightUnit ?? prevGoals.heightUnit;
+  const newAge = updates.age ?? prevGoals.age;
+  const newBiologicalSex = updates.biologicalSex ?? prevGoals.biologicalSex;
+  const newGoalType = updates.goalType ?? prevGoals.goalType ?? 'maintenance';
+  const newWeeklyTarget = Math.max(0, updates.weeklyTarget ?? prevGoals.weeklyTarget ?? 0);
+
   const derived = calculateDerivedValues(
     newStartingWeight,
     newCurrentWeight,
@@ -193,7 +254,9 @@ export const updateGoals = (updates: GoalsInput): void => {
     newActivityLevel,
     newHeightCm,
     newAge,
-    newBiologicalSex
+    newBiologicalSex,
+    newGoalType,
+    newWeeklyTarget
   );
   
   goals = {
@@ -206,6 +269,7 @@ export const updateGoals = (updates: GoalsInput): void => {
     heightUnit: newHeightUnit,
     age: newAge,
     biologicalSex: newBiologicalSex,
+    goalType: newGoalType,
     ...derived,
   };
   
@@ -228,8 +292,8 @@ export const isWeeklyTargetSafe = (): boolean => {
 
 // Helper to get recommended timeline for safe weight loss
 export const getRecommendedTimeline = (): number => {
-  const totalToLose = Math.abs(goals.startingWeight - goals.goalWeight);
-  return Math.ceil(totalToLose / MAX_SAFE_WEEKLY_LOSS);
+  const remaining = Math.max(0, goals.currentWeight - goals.goalWeight);
+  return Math.ceil(remaining / MAX_SAFE_WEEKLY_LOSS);
 };
 
 // Helper to get days with meal data (for calendar)

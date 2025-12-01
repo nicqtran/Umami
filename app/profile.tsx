@@ -1,5 +1,8 @@
-import { ActivityLevel, BiologicalSex, GoalsState, HeightUnit, subscribeGoals, updateGoals } from '@/state/goals';
-import { subscribeUserProfile, updateUserProfile, UserProfile } from '@/state/user';
+import { ActivityLevel, BiologicalSex, GoalsState, HeightUnit, subscribeGoals, updateGoals, getGoals } from '@/state/goals';
+import { subscribeUserProfile, updateUserProfile, UserProfile, getUserProfile } from '@/state/user';
+import { upsertProfile } from '@/services/profile';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { addWeightEntry } from '@/state/weight-log';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -49,6 +52,7 @@ const genderOptions: Array<{ key: BiologicalSex; label: string; short: string }>
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { user } = useSupabaseAuth();
   const [fontsLoaded] = useFonts({
     Inter_300Light,
     Inter_400Regular,
@@ -114,6 +118,7 @@ export default function ProfileScreen() {
     });
     if (!result.canceled && result.assets[0]) {
       updateUserProfile({ avatarUri: result.assets[0].uri });
+      await syncProfileToSupabase();
     }
   };
 
@@ -130,11 +135,13 @@ export default function ProfileScreen() {
     });
     if (!result.canceled && result.assets[0]) {
       updateUserProfile({ avatarUri: result.assets[0].uri });
+      await syncProfileToSupabase();
     }
   };
 
   const removePhoto = () => {
-    updateUserProfile({ avatarUri: undefined });
+    updateUserProfile({ avatarUri: null });
+    syncProfileToSupabase();
   };
 
   // Subscribe to goals state
@@ -239,37 +246,79 @@ export default function ProfileScreen() {
     }, 50);
   };
 
-  const saveWeightEdit = (type: 'start' | 'current' | 'goal' | 'timeline' | 'height' | 'age') => {
+  // Helper function to sync all profile data to Supabase
+  const syncProfileToSupabase = async () => {
+    if (!user?.id) return;
+
+    // Pull the freshest snapshots to avoid stale state
+    const latestGoals = getGoals();
+    const latestProfile = getUserProfile();
+
+    try {
+      await upsertProfile({
+        userId: user.id,
+        name: latestProfile.name,
+        email: latestProfile.email,
+        avatarUrl: latestProfile.avatarUri,
+        age: latestGoals.age,
+        dateOfBirth: latestProfile.dateOfBirth,
+        biologicalSex: latestGoals.biologicalSex,
+        currentWeight: latestGoals.currentWeight,
+        goalWeight: latestGoals.goalWeight,
+        startingWeight: latestGoals.startingWeight,
+        timelineWeeks: latestGoals.timelineWeeks,
+        activityLevel: latestGoals.activityLevel,
+        heightCm: latestGoals.heightCm,
+        heightUnit: latestGoals.heightUnit,
+      });
+    } catch (error) {
+      console.error('Failed to sync profile to Supabase:', error);
+    }
+  };
+
+  const saveWeightEdit = async (type: 'start' | 'current' | 'goal' | 'timeline' | 'height' | 'age') => {
     const parsed = parseFloat(weightDraft);
     if (Number.isFinite(parsed) && parsed > 0) {
       // Convert from display unit to lbs for storage if needed
       const valueInLbs = weightUnit === 'kg' && !['timeline', 'height', 'age'].includes(type) ? kgToLbs(parsed) : parsed;
-      
+
       if (type === 'start') {
         updateGoals({ startingWeight: valueInLbs });
       } else if (type === 'current') {
         updateGoals({ currentWeight: valueInLbs });
+        // Create a weight log entry when current weight is updated
+        if (user?.id) {
+          try {
+            await addWeightEntry(user.id, valueInLbs);
+          } catch (error) {
+            console.error('Failed to add weight log entry:', error);
+          }
+        }
       } else if (type === 'goal') {
         updateGoals({ goalWeight: valueInLbs });
       } else if (type === 'timeline') {
         updateGoals({ timelineWeeks: Math.round(parsed) });
       } else if (type === 'height') {
         // Convert from display unit to cm for storage
-        const valueInCm = goals?.heightUnit === 'inches' 
-          ? Math.round(parsed * 2.54) 
+        const valueInCm = goals?.heightUnit === 'inches'
+          ? Math.round(parsed * 2.54)
           : Math.round(parsed);
         updateGoals({ heightCm: valueInCm });
       } else if (type === 'age') {
         updateGoals({ age: Math.round(parsed) });
       }
+
+      // Sync to Supabase
+      await syncProfileToSupabase();
     }
     setEditingWeight(null);
     setWeightDraft('');
   };
 
-  const toggleHeightUnit = () => {
+  const toggleHeightUnit = async () => {
     const newUnit: HeightUnit = goals?.heightUnit === 'inches' ? 'cm' : 'inches';
     updateGoals({ heightUnit: newUnit });
+    await syncProfileToSupabase();
   };
 
   // Helper to get display height in current unit
@@ -439,9 +488,10 @@ export default function ProfileScreen() {
                   <Pressable
                     key={option.key}
                     style={[styles.genderOption, goals?.biologicalSex === option.key && styles.genderOptionActive]}
-                    onPress={() => {
+                    onPress={async () => {
                       updateGoals({ biologicalSex: option.key });
                       setShowGenderPicker(false);
+                      await syncProfileToSupabase();
                     }}>
                     <Text style={[styles.genderOptionText, bodyFont, goals?.biologicalSex === option.key && styles.genderOptionTextActive]}>
                       {option.label}
@@ -478,7 +528,7 @@ export default function ProfileScreen() {
           </Animated.View>
 
           <Animated.View style={createCardStyle(cardAnims[3])}>
-            <Pressable style={styles.currentWeightCard} onPress={() => openWeightEditor('current', currentWeight)}>
+            <View style={styles.currentWeightCard}>
               <Text style={[styles.currentWeightLabel, bodyFont]}>Current Weight</Text>
               {renderEditableWeight('current', currentWeight, [styles.currentWeightValue, titleFont, weightUnit === 'lbs' && styles.currentWeightValueSmall])}
               <View style={styles.progressWrapper}>
@@ -487,7 +537,7 @@ export default function ProfileScreen() {
                 </View>
                 <Text style={[styles.progressLabel, bodyFont]}>{clampedProgress}% to goal</Text>
               </View>
-            </Pressable>
+            </View>
           </Animated.View>
 
           <Animated.View style={[styles.metricCard, createCardStyle(cardAnims[4])]}>
@@ -512,7 +562,10 @@ export default function ProfileScreen() {
                 <Pressable
                   key={level.key}
                   style={[styles.activityOption, goals?.activityLevel === level.key && styles.activityOptionActive]}
-                  onPress={() => updateGoals({ activityLevel: level.key })}>
+                  onPress={async () => {
+                    updateGoals({ activityLevel: level.key });
+                    await syncProfileToSupabase();
+                  }}>
                   <View style={styles.activityContent}>
                     <Text style={[styles.activityLabel, semiFont, goals?.activityLevel === level.key && styles.activityLabelActive]}>
                       {level.label}

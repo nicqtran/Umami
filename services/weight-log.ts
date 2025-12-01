@@ -14,7 +14,7 @@ type SupabaseWeightRow = {
 const toWeightEntry = (row: SupabaseWeightRow): WeightEntry => ({
   id: row.id,
   date: row.date,
-  weight: row.weight,
+  weight: Number(row.weight),
   note: row.note ?? undefined,
   timestamp: row.updated_at ? Date.parse(row.updated_at) : Date.parse(row.created_at ?? row.date),
 });
@@ -24,7 +24,8 @@ export const fetchWeightEntriesForUser = async (userId: string): Promise<WeightE
     .from('weight_entries')
     .select('*')
     .eq('user_id', userId)
-    .order('date', { ascending: false });
+    .order('date', { ascending: true })
+    .order('updated_at', { ascending: true });
 
   if (error) throw error;
   return (data ?? []).map(toWeightEntry);
@@ -38,13 +39,20 @@ export const insertWeightEntry = async (params: {
 }): Promise<WeightEntry> => {
   const { userId, weight, date, note } = params;
 
+  console.log('📝 Inserting weight entry to Supabase:', { userId, weight, date, note });
+
   const { data, error } = await supabase
     .from('weight_entries')
     .insert([{ user_id: userId, weight, date, note }])
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('❌ Supabase insert error:', error);
+    throw error;
+  }
+
+  console.log('✅ Weight entry inserted:', data);
   return toWeightEntry(data as SupabaseWeightRow);
 };
 

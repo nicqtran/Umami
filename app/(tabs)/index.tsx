@@ -1,5 +1,7 @@
 import { GoalsState, subscribeGoals } from '@/state/goals';
 import { MealEntry, addMeal, getDaysAgoId, subscribeMeals } from '@/state/meals';
+import { subscribeUserProfile, UserProfile } from '@/state/user';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -10,9 +12,9 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Easing, FlatList, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-type Macro = { label: string; value: string; color: string };
+type Macro = { label: string; value: string; color: string; current: number; goal: number; percentage: number };
 type Meal = { id: string; name: string; time: string; calories: string; macros: string; image: number | { uri: string } };
-type DaySummary = { id: string; label: string; calories: number; goal: number; macros: Macro[] };
+type DaySummary = { id: string; label: string; calories: number; goal: number; macros: Macro[]; percentage: number };
 
 const background = '#F8F9FB';
 const card = '#FFFFFF';
@@ -20,6 +22,7 @@ const border = '#E6E8EB';
 const text = '#111418';
 const muted = '#6A7178';
 const accent = '#2C3E50';
+const contentGutter = 20;
 
 const macroAccents: Record<'carbs' | 'protein' | 'fat', string> = {
   carbs: '#6AB7A8',
@@ -39,11 +42,17 @@ const getDayLabel = (daysAgo: number): string => {
 };
 
 export default function HomeScreen() {
-  const { width } = Dimensions.get('window');
-  const cardWidth = useMemo(() => width * 0.86, [width]);
+  const { width: screenWidth } = Dimensions.get('window');
+  const availableWidth = useMemo(() => screenWidth - contentGutter * 2, [screenWidth]);
+  const { user } = useSupabaseAuth();
+  const cardWidth = useMemo(() => Math.round(availableWidth * 0.94), [availableWidth]);
   const cardSpacing = 10;
   const itemSize = cardWidth + cardSpacing * 2;
-  const spacerSize = useMemo(() => Math.max(0, width / 2 - (cardWidth / 2 + cardSpacing)), [width, cardWidth, cardSpacing]);
+  // Perfect centering: spacer positions first card center at available width center
+  const spacerSize = useMemo(
+    () => Math.max(Math.round((availableWidth - cardWidth) / 2 - cardSpacing), 0),
+    [availableWidth, cardWidth, cardSpacing],
+  );
 
   // Subscribe to goals state for daily calorie goal
   const [goals, setGoals] = useState<GoalsState | null>(null);
@@ -70,6 +79,7 @@ export default function HomeScreen() {
     [],
   );
   const [meals, setMeals] = useState<MealEntry[]>([]);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
   const days = useMemo<DaySummary[]>(() => {
     return initialDayMeta.map((meta) => {
@@ -94,13 +104,48 @@ export default function HomeScreen() {
         },
         { calories: 0, protein: 0, carbs: 0, fat: 0 },
       );
+      // Calculate macro goals based on calorie goal and standard distribution
+      // Protein: 30% of calories (4 cal/g), Carbs: 40% (4 cal/g), Fat: 30% (9 cal/g)
+      const proteinGoal = Math.round((dailyCalorieGoal * 0.30) / 4);
+      const carbsGoal = Math.round((dailyCalorieGoal * 0.40) / 4);
+      const fatGoal = Math.round((dailyCalorieGoal * 0.30) / 9);
+
       const macros: Macro[] = [
-        { label: 'Carbs', value: `${Math.round(macrosTotal.carbs)}g`, color: macroAccents.carbs },
-        { label: 'Protein', value: `${Math.round(macrosTotal.protein)}g`, color: macroAccents.protein },
-        { label: 'Fat', value: `${Math.round(macrosTotal.fat)}g`, color: macroAccents.fat },
+        {
+          label: 'Carbs',
+          value: `${Math.round(macrosTotal.carbs)}g`,
+          color: macroAccents.carbs,
+          current: Math.round(macrosTotal.carbs),
+          goal: carbsGoal,
+          percentage: Math.min((macrosTotal.carbs / carbsGoal) * 100, 100)
+        },
+        {
+          label: 'Protein',
+          value: `${Math.round(macrosTotal.protein)}g`,
+          color: macroAccents.protein,
+          current: Math.round(macrosTotal.protein),
+          goal: proteinGoal,
+          percentage: Math.min((macrosTotal.protein / proteinGoal) * 100, 100)
+        },
+        {
+          label: 'Fat',
+          value: `${Math.round(macrosTotal.fat)}g`,
+          color: macroAccents.fat,
+          current: Math.round(macrosTotal.fat),
+          goal: fatGoal,
+          percentage: Math.min((macrosTotal.fat / fatGoal) * 100, 100)
+        },
       ];
       // Use goal from goals state
-      return { id: meta.id, label: meta.label, calories: Math.round(macrosTotal.calories), goal: dailyCalorieGoal, macros };
+      const caloriePercentage = Math.min((macrosTotal.calories / dailyCalorieGoal) * 100, 100);
+      return {
+        id: meta.id,
+        label: meta.label,
+        calories: Math.round(macrosTotal.calories),
+        goal: dailyCalorieGoal,
+        macros,
+        percentage: caloriePercentage
+      };
     });
   }, [initialDayMeta, meals, dailyCalorieGoal]);
 
@@ -113,22 +158,30 @@ export default function HomeScreen() {
     [reversedDays],
   );
 
+  // Calculate snap offsets for each day card to be centered
   const snapOffsets = useMemo(() => {
-    let offset = 0;
     const offsets: number[] = [];
-    carouselData.forEach((item) => {
-      offsets.push(offset);
-      offset += item.spacer ? spacerSize : itemSize;
-    });
+    for (let i = 0; i < reversedDays.length; i++) {
+      // Each card starts at: spacerSize + (cardIndex * itemSize)
+      offsets.push(spacerSize + i * itemSize);
+    }
     return offsets;
-  }, [carouselData, spacerSize, itemSize]);
-
-  const daySnapOffsets = useMemo(() => snapOffsets.slice(1, snapOffsets.length - 1), [snapOffsets]);
+  }, [reversedDays.length, spacerSize, itemSize]);
 
   const listRef = useRef<FlatList<any>>(null);
   const router = useRouter();
-  const scrollXRef = useRef(0);
-  const isScrollingRef = useRef(false);
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const isAnimatingRef = useRef(false);
+  const lastActiveIndexRef = useRef(initialIndex);
+
+  // Animation refs for calorie card entrance
+  const cardEntranceAnim = useRef(new Animated.Value(0)).current;
+  const macroBarAnims = useRef<Record<string, Animated.Value>>({}).current;
+
+  useEffect(() => {
+    const unsubscribe = subscribeUserProfile(setUserProfile);
+    return () => unsubscribe();
+  }, []);
 
   // Camera action sheet and scanning state
   const [showCameraSheet, setShowCameraSheet] = useState(false);
@@ -140,6 +193,15 @@ export default function HomeScreen() {
   const scanProgress = useRef(new Animated.Value(0)).current;
   const sheetSlideAnim = useRef(new Animated.Value(0)).current;
   const mealsFadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(cardEntranceAnim, {
+      toValue: 1,
+      duration: 480,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [cardEntranceAnim]);
 
   // Scanning messages that rotate during analysis
   const scanningMessages = [
@@ -211,18 +273,25 @@ export default function HomeScreen() {
     const currentActiveDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
     const dayId = currentActiveDay?.id || getDaysAgoId(0);
 
-    // Create the meal
-    const newMealId = `${Date.now()}`;
+    // Create the meal - need user to be logged in
+    if (!user?.id) {
+      setIsScanning(false);
+      setCapturedImageUri(null);
+      scanPulse.setValue(1);
+      scanProgress.setValue(0);
+      Alert.alert('Not logged in', 'Please log in to add meals.');
+      return;
+    }
+
     const now = new Date();
-    const newMeal: MealEntry = {
-      id: newMealId,
+    const newMealData = {
       dayId,
       name: 'Scanned meal',
       time: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
       image: { uri: imageUri },
       foods: [],
     };
-    addMeal(newMeal);
+    const newMeal = await addMeal(user.id, newMealData);
 
     // Reset scanning state
     setIsScanning(false);
@@ -231,8 +300,8 @@ export default function HomeScreen() {
     scanProgress.setValue(0);
 
     // Navigate to meal details
-    router.push({ pathname: '/meal-details', params: { dayId, mealId: newMealId } });
-  }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse]);
+    router.push({ pathname: '/meal-details', params: { dayId, mealId: newMeal.id } });
+  }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse, user]);
 
   // Smooth sheet close animation
   const closeSheetWithAnimation = useCallback(() => {
@@ -356,10 +425,17 @@ export default function HomeScreen() {
   }, [showCameraSheet, sheetSlideAnim]);
 
   const getItemLayout = (_: unknown, index: number) => {
-    const item = carouselData[index];
-    const length = item?.spacer ? spacerSize : itemSize;
-    const offset = snapOffsets[index] ?? 0;
-    return { length, offset, index };
+    // First item is spacer-left
+    if (index === 0) {
+      return { length: spacerSize, offset: 0, index };
+    }
+    // Last item is spacer-right  
+    if (index === carouselData.length - 1) {
+      return { length: spacerSize, offset: spacerSize + (reversedDays.length) * itemSize, index };
+    }
+    // Cards in between
+    const cardIndex = index - 1;
+    return { length: itemSize, offset: spacerSize + cardIndex * itemSize, index };
   };
 
   useEffect(() => {
@@ -379,6 +455,25 @@ export default function HomeScreen() {
   }, [activeIndex, mealsFadeAnim]);
 
   const activeDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
+
+  // Smoothly animate macro fills when the active day changes
+  useEffect(() => {
+    if (!activeDay) return;
+
+    activeDay.macros.forEach((macro) => {
+      if (!macroBarAnims[macro.label]) {
+        macroBarAnims[macro.label] = new Animated.Value(0);
+      }
+
+      Animated.timing(macroBarAnims[macro.label], {
+        toValue: macro.percentage,
+        duration: 450,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+    });
+  }, [activeDay, macroBarAnims]);
+
   const currentMeals = meals
     .filter((meal) => meal.dayId === activeDay?.id)
     .map((meal) => {
@@ -430,123 +525,186 @@ export default function HomeScreen() {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push('/profile');
             }}>
-            <Text style={[styles.avatarText, semiFont]}>U</Text>
+            {userProfile?.avatarUri ? (
+              <Image source={{ uri: userProfile.avatarUri }} style={styles.avatarImage} />
+            ) : (
+              <Text style={[styles.avatarText, semiFont]}>
+                {(userProfile?.name || 'U').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+              </Text>
+            )}
           </Pressable>
         </View>
 
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           <View style={styles.summaryWrapper}>
-            <FlatList
-              ref={listRef}
-              data={carouselData}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              decelerationRate="fast"
-              disableIntervalMomentum={true}
-              initialScrollIndex={initialIndex + 1}
-              getItemLayout={getItemLayout}
-              contentContainerStyle={styles.summaryCarousel}
-              bounces={false}
-              scrollEventThrottle={16}
-              onScrollBeginDrag={() => {
-                isScrollingRef.current = true;
-              }}
-              onScroll={(event) => {
-                scrollXRef.current = event.nativeEvent.contentOffset.x;
-              }}
-              onScrollEndDrag={(event) => {
-                const offsetX = event.nativeEvent.contentOffset.x;
-                const velocity = event.nativeEvent.velocity?.x || 0;
+            <Animated.View
+              style={[
+                styles.summaryCarouselWrapper,
+                {
+                  opacity: cardEntranceAnim,
+                  transform: [
+                    {
+                      translateY: cardEntranceAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [12, 0],
+                      }),
+                    },
+                    {
+                      scale: cardEntranceAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.98, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <FlatList
+                ref={listRef}
+                data={carouselData}
+                keyExtractor={(item) => item.id}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                decelerationRate={0.95}
+                initialScrollIndex={initialIndex + 1}
+                getItemLayout={getItemLayout}
+                contentContainerStyle={styles.summaryCarousel}
+                bounces={false}
+                scrollEventThrottle={16}
+                snapToOffsets={snapOffsets}
+                snapToAlignment="start"
+                removeClippedSubviews={false}
+                onScroll={Animated.event(
+                  [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+                  { useNativeDriver: false }
+                )}
+                onMomentumScrollEnd={(event) => {
+                  if (isAnimatingRef.current) return;
+                  const offsetX = event.nativeEvent.contentOffset.x;
 
-                // Find closest snap point
-                let targetIndex = daySnapOffsets.reduce(
-                  (closest, offset, idx) => {
-                    const currentDiff = Math.abs(offsetX - offset);
-                    const closestDiff = Math.abs(offsetX - daySnapOffsets[closest]);
-                    return currentDiff < closestDiff ? idx : closest;
-                  },
-                  0,
-                );
-
-                // Adjust for velocity - if fast swipe, go to next/prev
-                if (Math.abs(velocity) > 0.5) {
-                  if (velocity < 0 && targetIndex < daySnapOffsets.length - 1) {
-                    targetIndex = targetIndex + 1;
-                  } else if (velocity > 0 && targetIndex > 0) {
-                    targetIndex = targetIndex - 1;
+                  // Find closest snap point
+                  let closestIndex = 0;
+                  let minDiff = Math.abs(offsetX - snapOffsets[0]);
+                  for (let i = 1; i < snapOffsets.length; i++) {
+                    const diff = Math.abs(offsetX - snapOffsets[i]);
+                    if (diff < minDiff) {
+                      minDiff = diff;
+                      closestIndex = i;
+                    }
                   }
-                }
 
-                const targetOffset = daySnapOffsets[targetIndex] ?? 0;
-                listRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
-                setActiveIndex(targetIndex);
-              }}
-              onMomentumScrollEnd={(event) => {
-                const offsetX = event.nativeEvent.contentOffset.x;
+                  if (closestIndex !== lastActiveIndexRef.current) {
+                    lastActiveIndexRef.current = closestIndex;
+                    setActiveIndex(closestIndex);
+                  }
+                }}
+                renderItem={({ item: day, index }) => {
+                  if ('spacer' in day && day.spacer) {
+                    return <View style={{ width: spacerSize }} />;
+                  }
 
-                // Find closest snap point
-                const closestIndex = daySnapOffsets.reduce(
-                  (closest, offset, idx) => {
-                    const currentDiff = Math.abs(offsetX - offset);
-                    const closestDiff = Math.abs(offsetX - daySnapOffsets[closest]);
-                    return currentDiff < closestDiff ? idx : closest;
-                  },
-                  0,
-                );
+                  // Adjust index for spacer offset (index 0 is spacer-left)
+                  const cardIndex = index - 1;
+                  
+                  // Calculate animation based on scroll position
+                  const cardOffset = spacerSize + cardIndex * itemSize;
+                  const inputRange = [
+                    cardOffset - itemSize,
+                    cardOffset,
+                    cardOffset + itemSize,
+                  ];
 
-                const targetOffset = daySnapOffsets[closestIndex] ?? 0;
+                  const scale = scrollX.interpolate({
+                    inputRange,
+                    outputRange: [0.92, 1, 0.92],
+                    extrapolate: 'clamp',
+                  });
 
-                // Only force snap if we're off by more than 1 pixel
-                if (Math.abs(offsetX - targetOffset) > 1) {
-                  listRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
-                }
+                  const opacity = scrollX.interpolate({
+                    inputRange,
+                    outputRange: [0.5, 1, 0.5],
+                    extrapolate: 'clamp',
+                  });
 
-                setActiveIndex(closestIndex);
-                isScrollingRef.current = false;
-              }}
-              renderItem={({ item: day }) => {
-                if (day.spacer) {
-                  return <View style={{ width: spacerSize }} />;
-                }
-                return (
-                  <View
-                    style={[
-                      styles.summaryCard,
-                      { width: cardWidth, marginHorizontal: cardSpacing },
-                    ]}>
-                    <View style={styles.summaryTop}>
-                      <Text style={[styles.summaryLabel, semiFont]}>{day.label.toUpperCase()}</Text>
-                      <Image
-                        source={require('@/assets/images/image-trimmed.png')}
-                        style={styles.summaryThumb}
-                        contentFit="cover"
-                      />
-                    </View>
-                    <View style={styles.caloriesBlock}>
-                    <Text style={[styles.calories, titleFont]}>
-                      {formatKcal(day.calories)} / {formatKcal(day.goal)} kcal
-                    </Text>
-                    <Text style={[styles.caloriesSub, bodyFont]}>
-                      Remaining {formatKcal(Math.max(day.goal - day.calories, 0))} kcal
-                    </Text>
-                    </View>
-                    <View style={styles.macrosRow}>
-                      {day.macros.map((item) => (
-                        <View key={item.label} style={styles.macroItem}>
-                          <View style={[styles.macroDot, { backgroundColor: item.color }]} />
-                          <Text style={[styles.macroLabel, bodyFont]}>{item.label}</Text>
-                          <Text style={[styles.macroValue, semiFont]}>{item.value}</Text>
-                          <View style={styles.macroBarBackground}>
-                            <View style={[styles.macroBarFill, { backgroundColor: item.color }]} />
+                  const translateY = scrollX.interpolate({
+                    inputRange,
+                    outputRange: [8, 0, 8],
+                    extrapolate: 'clamp',
+                  });
+
+                  const glowOpacity = scrollX.interpolate({
+                    inputRange,
+                    outputRange: [0, 0.28, 0],
+                    extrapolate: 'clamp',
+                  });
+
+                  const daySummary = day as DaySummary;
+                  const isActiveCard = daySummary.id === activeDay?.id;
+
+                  return (
+                    <Animated.View
+                      style={[
+                        styles.summaryCard,
+                        {
+                          width: cardWidth,
+                          marginHorizontal: cardSpacing,
+                          transform: [{ scale }, { translateY }],
+                          opacity,
+                        },
+                      ]}>
+                      <Animated.View pointerEvents="none" style={[styles.cardGlow, { opacity: glowOpacity }]} />
+                      <View style={styles.summaryTop}>
+                        <Text style={[styles.summaryLabel, semiFont]}>{daySummary.label.toUpperCase()}</Text>
+                        <Image
+                          source={require('@/assets/images/image-trimmed.png')}
+                          style={styles.summaryThumb}
+                          contentFit="cover"
+                        />
+                      </View>
+                      <View style={styles.caloriesBlock}>
+                        <Text style={[styles.calories, titleFont]}>
+                          {formatKcal(daySummary.calories)} / {formatKcal(daySummary.goal)} kcal
+                        </Text>
+                        <Text style={[styles.caloriesSub, bodyFont]}>
+                          Remaining {formatKcal(Math.max(daySummary.goal - daySummary.calories, 0))} kcal
+                        </Text>
+                      </View>
+                      <View style={styles.macrosRow}>
+                        {daySummary.macros.map((item: Macro) => (
+                          <View key={item.label} style={styles.macroItem}>
+                            <View style={styles.macroHeader}>
+                              <View style={styles.macroLabelRow}>
+                                <View style={[styles.macroDot, { backgroundColor: item.color }]} />
+                                <Text style={[styles.macroLabel, bodyFont]}>{item.label}</Text>
+                              </View>
+                              <Text style={[styles.macroValue, semiFont]}>
+                                {item.current}/{item.goal}g
+                              </Text>
+                            </View>
+                            <View style={styles.macroBarBackground}>
+                              <Animated.View
+                                style={[
+                                  styles.macroBarFill,
+                                  {
+                                    backgroundColor: item.color,
+                                    width: isActiveCard
+                                      ? macroBarAnims[item.label]?.interpolate({
+                                          inputRange: [0, 100],
+                                          outputRange: ['0%', '100%'],
+                                        }) || '0%'
+                                      : `${item.percentage}%`,
+                                  },
+                                ]}
+                              />
+                            </View>
                           </View>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                );
-              }}
-            />
+                        ))}
+                      </View>
+                    </Animated.View>
+                  );
+                }}
+              />
+            </Animated.View>
             <View style={styles.pagination}>
               {reversedDays.map((day, index) => (
                 <View
@@ -798,32 +956,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
   scroll: {
-    paddingHorizontal: 20,
+    paddingHorizontal: contentGutter,
     paddingBottom: 120,
     gap: 28,
   },
   summaryCard: {
     backgroundColor: card,
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: border,
-    padding: 24,
-    gap: 18,
+    padding: 28,
+    gap: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  cardGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    backgroundColor: 'rgba(44, 62, 80, 0.08)',
   },
   summaryWrapper: {
+    width: '100%',
     alignItems: 'center',
     gap: 14,
-    marginHorizontal: -20,
-    paddingHorizontal: 20,
+  },
+  summaryCarouselWrapper: {
+    width: '100%',
   },
   summaryCarousel: {
-    paddingHorizontal: 0,
+    alignItems: 'center',
   },
   summaryTop: {
     flexDirection: 'row',
@@ -846,14 +1016,14 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   calories: {
-    fontSize: 32,
+    fontSize: 36,
     color: text,
     fontWeight: '700',
-    letterSpacing: -0.5,
-    lineHeight: 38,
+    letterSpacing: -0.8,
+    lineHeight: 42,
   },
   caloriesSub: {
-    fontSize: 14,
+    fontSize: 15,
     color: muted,
     marginTop: 2,
     letterSpacing: 0.1,
@@ -861,11 +1031,21 @@ const styles = StyleSheet.create({
   macrosRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 14,
-    paddingTop: 6,
+    gap: 16,
+    paddingTop: 8,
   },
   macroItem: {
     flex: 1,
+    gap: 9,
+  },
+  macroHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  macroLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
   },
   macroDot: {
@@ -876,21 +1056,24 @@ const styles = StyleSheet.create({
   macroLabel: {
     fontSize: 12,
     color: muted,
+    fontWeight: '500',
   },
   macroValue: {
-    fontSize: 14,
+    fontSize: 13,
     color: text,
     fontWeight: '600',
   },
   macroBarBackground: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#EFF0F3',
+    height: 10,
+    borderRadius: 6,
+    backgroundColor: '#EEF1F5',
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E3E7ED',
   },
   macroBarFill: {
-    width: '62%',
     height: '100%',
+    borderRadius: 6,
   },
   pagination: {
     flexDirection: 'row',
@@ -951,23 +1134,23 @@ const styles = StyleSheet.create({
   mealCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 18,
     backgroundColor: card,
     borderColor: border,
     borderWidth: 1,
-    borderRadius: 16,
-    padding: 18,
-    minHeight: 110,
+    borderRadius: 18,
+    padding: 20,
+    minHeight: 120,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 8,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 2,
   },
   mealThumb: {
-    width: 64,
-    height: 64,
-    borderRadius: 14,
+    width: 70,
+    height: 70,
+    borderRadius: 16,
     backgroundColor: '#F1F2F5',
   },
   mealContent: {
@@ -976,10 +1159,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   mealName: {
-    fontSize: 17,
+    fontSize: 18,
     color: text,
     fontWeight: '600',
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
   },
   mealMeta: {
     flexDirection: 'row',
@@ -1006,7 +1189,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 20,
+    paddingHorizontal: contentGutter,
     paddingBottom: 24,
     paddingTop: 16,
     backgroundColor: 'transparent',

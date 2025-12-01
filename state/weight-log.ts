@@ -26,11 +26,12 @@ const notify = () => {
 };
 
 
-export const loadWeightEntriesFromDb = async (userId: string): Promise<void> => {
+export const loadWeightEntriesFromDb = async (userId: string): Promise<WeightEntry[]> => {
   try {
     const entries = await fetchWeightEntriesForUser(userId);
     weightEntries = entries;
     notify();
+    return weightEntries;
   } catch (error) {
     console.error('Failed to load weight entries:', error);
     throw error;
@@ -39,12 +40,14 @@ export const loadWeightEntriesFromDb = async (userId: string): Promise<void> => 
 
 // Get all weight entries sorted by date (newest first)
 export const getWeightEntries = (): WeightEntry[] => {
-  return [...weightEntries].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // Use T00:00:00 suffix to parse dates as local time, not UTC
+  return [...weightEntries].sort((a, b) => new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime());
 };
 
 // Get weight entries sorted by date (oldest first) - useful for charts
 export const getWeightEntriesChronological = (): WeightEntry[] => {
-  return [...weightEntries].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  // Use T00:00:00 suffix to parse dates as local time, not UTC
+  return [...weightEntries].sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
 };
 
 // Get entry for a specific date
@@ -58,14 +61,24 @@ export const getLatestWeight = (): WeightEntry | undefined => {
   return getWeightEntries()[0];
 };
 
+// Format a Date as YYYY-MM-DD in local time to avoid timezone drift
+const formatDateLocal = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Get entries within a date range
 export const getWeightEntriesInRange = (startDate: Date, endDate: Date): WeightEntry[] => {
-  const start = startDate.toISOString().split('T')[0];
-  const end = endDate.toISOString().split('T')[0];
+  // Use formatDateLocal to avoid timezone issues with toISOString()
+  const start = formatDateLocal(startDate);
+  const end = formatDateLocal(endDate);
   
   return weightEntries
     .filter((entry) => entry.date >= start && entry.date <= end)
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    // Use T00:00:00 suffix to parse dates as local time, not UTC
+    .sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
 };
 
 // Add a new weight entry (with Supabase sync)
@@ -75,7 +88,8 @@ export const addWeightEntry = async (
   date?: string,
   note?: string
 ): Promise<WeightEntry> => {
-  const entryDate = date || new Date().toISOString().split('T')[0];
+  // Use formatDateLocal to avoid timezone issues with toISOString()
+  const entryDate = date || formatDateLocal(new Date());
 
   try {
     const newEntry = await insertWeightEntryDb({
@@ -222,11 +236,13 @@ export const initializeSampleData = async (
 
     // Only add entries every few days to simulate realistic logging
     if (i === 0 || i === weeks * 7 || Math.random() > 0.6) {
-      await addWeightEntry(userId, weight, date.toISOString().split('T')[0]);
+      // Use formatDateLocal to avoid timezone issues with toISOString()
+      await addWeightEntry(userId, weight, formatDateLocal(date));
     }
   }
 
   // Ensure current weight matches
-  const todayStr = today.toISOString().split('T')[0];
+  // Use formatDateLocal to avoid timezone issues with toISOString()
+  const todayStr = formatDateLocal(today);
   await addWeightEntry(userId, currentWeight, todayStr);
 };

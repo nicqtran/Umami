@@ -1,5 +1,7 @@
-import { GoalsState, subscribeGoals, updateGoals } from '@/state/goals';
-import { subscribeUserProfile, updateUserProfile, UserProfile } from '@/state/user';
+import { GoalsState, subscribeGoals, updateGoals, getGoals } from '@/state/goals';
+import { subscribeUserProfile, updateUserProfile, UserProfile, getUserProfile } from '@/state/user';
+import { upsertProfile } from '@/services/profile';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -37,6 +39,7 @@ type EditingField = 'name' | 'email' | 'password' | null;
 
 export default function AccountDetailsScreen() {
   const router = useRouter();
+  const { user } = useSupabaseAuth();
   const [fontsLoaded] = useFonts({
     Inter_300Light,
     Inter_400Regular,
@@ -79,6 +82,36 @@ export default function AccountDetailsScreen() {
     return age;
   };
 
+  // Helper function to sync all profile data to Supabase
+  const syncProfileToSupabase = async () => {
+    if (!user?.id) return;
+
+    // Use the latest goals snapshot from the store to avoid stale values during rapid edits
+    const latestGoals = getGoals();
+    const latestProfile = getUserProfile();
+
+    try {
+      await upsertProfile({
+        userId: user.id,
+        name: latestProfile.name,
+        email: latestProfile.email,
+        avatarUrl: latestProfile.avatarUri,
+        age: latestGoals.age,
+        dateOfBirth: latestProfile.dateOfBirth,
+        biologicalSex: latestGoals.biologicalSex,
+        currentWeight: latestGoals.currentWeight,
+        goalWeight: latestGoals.goalWeight,
+        startingWeight: latestGoals.startingWeight,
+        timelineWeeks: latestGoals.timelineWeeks,
+        activityLevel: latestGoals.activityLevel,
+        heightCm: latestGoals.heightCm,
+        heightUnit: latestGoals.heightUnit,
+      });
+    } catch (error) {
+      console.error('Failed to sync profile to Supabase:', error);
+    }
+  };
+
   // Format date for display
   const formatDate = (dateString?: string): string => {
     if (!dateString) return 'Add date of birth';
@@ -92,13 +125,59 @@ export default function AccountDetailsScreen() {
     setTempDate(selectedDate);
   };
 
-  const saveDateOfBirth = (date: Date) => {
-    const isoDate = date.toISOString().split('T')[0]; // YYYY-MM-DD
+  const saveDateOfBirth = async (date: Date) => {
+    // Format as YYYY-MM-DD in local time to avoid timezone drift
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const isoDate = `${year}-${month}-${day}`;
     const age = calculateAge(date);
     updateUserProfile({ dateOfBirth: isoDate });
     updateGoals({ age }); // Update age in goals state for BMR calculations
     setHasChanges(true);
     setShowDatePicker(false);
+    await syncProfileToSupabase();
+  };
+
+  // Smooth calendar month transition
+  const animateCalendarChange = (direction: 'left' | 'right', callback: () => void) => {
+    // Slide out animation
+    Animated.parallel([
+      Animated.timing(calendarSlideAnim, {
+        toValue: direction === 'left' ? -15 : 15,
+        duration: 180,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(calendarOpacityAnim, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      // Update the calendar month
+      callback();
+
+      // Reset position to opposite direction
+      calendarSlideAnim.setValue(direction === 'left' ? 15 : -15);
+
+      // Slide in animation
+      Animated.parallel([
+        Animated.timing(calendarSlideAnim, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+          useNativeDriver: true,
+        }),
+        Animated.timing(calendarOpacityAnim, {
+          toValue: 1,
+          duration: 200,
+          easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
   };
 
   const openDatePicker = () => {
@@ -113,6 +192,9 @@ export default function AccountDetailsScreen() {
     setTempDate(dateToUse);
     setCalendarMonth(new Date(dateToUse)); // Start calendar at the DOB month
     setShowDatePicker(true);
+    // Reset animations when opening
+    calendarSlideAnim.setValue(0);
+    calendarOpacityAnim.setValue(1);
   };
 
   // Generate year options for year picker
@@ -134,6 +216,8 @@ export default function AccountDetailsScreen() {
   const entrance = useRef(new Animated.Value(0)).current;
   const rowAnims = useRef([...Array(5)].map(() => new Animated.Value(0))).current;
   const saveButtonAnim = useRef(new Animated.Value(0)).current;
+  const calendarSlideAnim = useRef(new Animated.Value(0)).current;
+  const calendarOpacityAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     // Page entrance animation
@@ -218,13 +302,15 @@ export default function AccountDetailsScreen() {
     setConfirmPassword('');
   };
 
-  const saveFieldEdit = () => {
+  const saveFieldEdit = async () => {
     if (editingField === 'name' && fieldDraft.trim()) {
       updateUserProfile({ name: fieldDraft.trim() });
       setHasChanges(true);
+      await syncProfileToSupabase();
     } else if (editingField === 'email' && fieldDraft.trim()) {
       updateUserProfile({ email: fieldDraft.trim() });
       setHasChanges(true);
+      await syncProfileToSupabase();
     } else if (editingField === 'password' && fieldDraft.trim()) {
       // Password validation and save logic will be implemented with backend
       setHasChanges(true);
@@ -238,9 +324,9 @@ export default function AccountDetailsScreen() {
     setConfirmPassword('');
   };
 
-  const handleSave = () => {
-    // Changes are already saved to global state
-    // Navigate back
+  const handleSave = async () => {
+    // Sync all changes to Supabase before navigating back
+    await syncProfileToSupabase();
     router.back();
   };
 
@@ -438,13 +524,13 @@ export default function AccountDetailsScreen() {
                 <View style={styles.miniCalendarContainer}>
                   {/* Calendar Header */}
                   <View style={styles.miniCalendarHeader}>
-                    <Pressable 
+                    <Pressable
                       style={styles.miniCalendarNav}
                       onPress={() => {
                         const newMonth = new Date(calendarMonth);
                         newMonth.setMonth(newMonth.getMonth() - 1);
                         if (newMonth >= new Date(1920, 0, 1)) {
-                          setCalendarMonth(newMonth);
+                          animateCalendarChange('left', () => setCalendarMonth(newMonth));
                         }
                       }}
                     >
@@ -453,13 +539,13 @@ export default function AccountDetailsScreen() {
                     <Text style={styles.miniCalendarTitle}>
                       {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                     </Text>
-                    <Pressable 
+                    <Pressable
                       style={styles.miniCalendarNav}
                       onPress={() => {
                         const newMonth = new Date(calendarMonth);
                         newMonth.setMonth(newMonth.getMonth() + 1);
                         if (newMonth <= new Date()) {
-                          setCalendarMonth(newMonth);
+                          animateCalendarChange('right', () => setCalendarMonth(newMonth));
                         }
                       }}
                     >
@@ -477,32 +563,43 @@ export default function AccountDetailsScreen() {
                   </View>
 
                   {/* Calendar Days */}
-                  <View style={styles.miniDaysGrid}>
+                  <Animated.View
+                    style={[
+                      styles.miniDaysGrid,
+                      {
+                        opacity: calendarOpacityAnim,
+                        transform: [{ translateX: calendarSlideAnim }],
+                      },
+                    ]}
+                  >
                     {(() => {
                       const year = calendarMonth.getFullYear();
                       const month = calendarMonth.getMonth();
                       const firstDay = new Date(year, month, 1).getDay();
                       const daysInMonth = new Date(year, month + 1, 0).getDate();
                       const today = new Date();
-                      const selectedDateStr = tempDate.toISOString().split('T')[0];
-                      
+                      // Format in local time to avoid timezone drift
+                      const selectedDateStr = `${tempDate.getFullYear()}-${String(tempDate.getMonth() + 1).padStart(2, '0')}-${String(tempDate.getDate()).padStart(2, '0')}`;
+
                       const days: React.ReactNode[] = [];
-                      
+
                       // Empty cells for days before first of month
                       for (let i = 0; i < firstDay; i++) {
                         days.push(<View key={`empty-${i}`} style={styles.miniDayCell} />);
                       }
-                      
+
                       // Days of the month
                       for (let day = 1; day <= daysInMonth; day++) {
                         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const isSelected = dateStr === selectedDateStr;
-                        const todayStr = today.toISOString().split('T')[0];
+                        // Format in local time to avoid timezone drift
+                        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
                         const isToday = dateStr === todayStr;
-                        const isFuture = new Date(dateStr) > today;
-                        const isTooOld = new Date(dateStr) < new Date(1920, 0, 1);
+                        // Add T00:00:00 to parse as local time, not UTC
+                        const isFuture = new Date(dateStr + 'T00:00:00') > today;
+                        const isTooOld = new Date(dateStr + 'T00:00:00') < new Date(1920, 0, 1);
                         const isDisabled = isFuture || isTooOld;
-                        
+
                         days.push(
                           <Pressable
                             key={day}
@@ -527,10 +624,10 @@ export default function AccountDetailsScreen() {
                           </Pressable>
                         );
                       }
-                      
+
                       return days;
                     })()}
-                  </View>
+                  </Animated.View>
 
                   {/* Selected Date Display */}
                   <View style={styles.selectedDateDisplay}>

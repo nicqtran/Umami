@@ -28,9 +28,18 @@ export type MealEntry = {
 
 type Listener = (meals: MealEntry[]) => void;
 
-// Helper to get ISO date string for a date
+// Format a Date as YYYY-MM-DD in local time to avoid timezone drift
+const formatDateLocal = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Helper to get ISO date string for a date (in local timezone)
 export const getDateId = (date: Date = new Date()): string => {
-  return date.toISOString().split('T')[0];
+  // Use formatDateLocal to avoid timezone issues with toISOString()
+  return formatDateLocal(date);
 };
 
 // Helper to get today's date ID
@@ -50,58 +59,8 @@ export const getDaysAgoId = (daysAgo: number): string => {
   return getDateId(date);
 };
 
-// Initialize with dates relative to today
-const today = getTodayId();
-const yesterday = getYesterdayId();
-
-let meals: MealEntry[] = [
-  {
-    id: '1',
-    dayId: today,
-    name: 'Chicken bowl',
-    time: '1:24 PM',
-    image: require('@/assets/images/test-logo.png'),
-    foods: [
-      { id: 'f1', name: 'Grilled chicken', quantity: '120g', calories: 220, protein: 32, carbs: 0, fat: 8 },
-      { id: 'f2', name: 'Steamed rice', quantity: '180g', calories: 280, protein: 5, carbs: 56, fat: 2 },
-      { id: 'f3', name: 'Broccoli', quantity: '90g', calories: 80, protein: 5, carbs: 10, fat: 3 },
-    ],
-  },
-  {
-    id: '2',
-    dayId: today,
-    name: 'Avocado toast',
-    time: '9:12 AM',
-    image: require('@/assets/images/icon.png'),
-    foods: [{ id: 'f4', name: 'Avocado toast', quantity: '1 slice', calories: 340, protein: 12, carbs: 28, fat: 15 }],
-  },
-  {
-    id: '3',
-    dayId: today,
-    name: 'Berry yogurt',
-    time: '7:45 AM',
-    image: require('@/assets/images/react-logo.png'),
-    foods: [{ id: 'f5', name: 'Berry yogurt', quantity: '1 cup', calories: 220, protein: 10, carbs: 26, fat: 6 }],
-  },
-  {
-    id: 'y1',
-    dayId: yesterday,
-    name: 'Turkey sandwich',
-    time: '12:48 PM',
-    image: require('@/assets/images/image.png'),
-    foods: [
-      { id: 'f6', name: 'Turkey sandwich', quantity: '1 serving', calories: 520, protein: 29, carbs: 44, fat: 16 },
-    ],
-  },
-  {
-    id: 'y2',
-    dayId: yesterday,
-    name: 'Greek yogurt & berries',
-    time: '8:15 AM',
-    image: require('@/assets/images/image-trimmed.png'),
-    foods: [{ id: 'f7', name: 'Greek yogurt & berries', quantity: '1 bowl', calories: 210, protein: 12, carbs: 18, fat: 8 }],
-  },
-];
+// Start empty; meals are hydrated from Supabase after login
+let meals: MealEntry[] = [];
 
 const listeners: Listener[] = [];
 
@@ -131,7 +90,21 @@ export const loadMealsFromDb = async (userId: string): Promise<void> => {
   }
 };
 
-export const updateMealFoods = async (userId: string, mealId: string, foods: FoodItem[]) => {
+const isUuid = (value?: string) =>
+  typeof value === 'string' &&
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+
+export const updateMealFoods = async (userId: string, mealId: string, foods: FoodItem[] = []) => {
+  if (!userId || !mealId || !isUuid(userId) || !isUuid(mealId)) {
+    console.warn('Skipped updateMealFoods due to invalid ids', { userId, mealId });
+    return;
+  }
+  console.log('updateMealFoods payload', {
+    userId,
+    mealId,
+    foodCount: foods.length,
+    foodIds: foods.map((f) => f.id),
+  });
   try {
     const updatedMeal = await updateMealFoodsDb({ mealId, userId, foods });
     meals = meals.map((meal) => (meal.id === mealId ? updatedMeal : meal));
@@ -145,8 +118,12 @@ export const updateMealFoods = async (userId: string, mealId: string, foods: Foo
 export const updateMealMeta = async (
   userId: string,
   mealId: string,
-  data: Partial<Omit<MealEntry, 'id' | 'foods'>>
+  data: Partial<Omit<MealEntry, 'id' | 'foods'>> = {}
 ) => {
+  if (!userId || !mealId || !isUuid(userId) || !isUuid(mealId)) {
+    console.warn('Skipped updateMealMeta due to invalid ids', { userId, mealId });
+    return;
+  }
   try {
     const updates: {
       name?: string;

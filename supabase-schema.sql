@@ -1,3 +1,58 @@
+-- Profiles table to persist user info and avatar URLs
+CREATE TABLE IF NOT EXISTS profiles (
+  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  name text,
+  email text,
+  avatar_url text,
+  age integer,
+  date_of_birth date,
+  biological_sex text,
+  current_weight numeric,
+  goal_weight numeric,
+  starting_weight numeric,
+  timeline_weeks integer,
+  activity_level text,
+  height_cm numeric,
+  height_unit text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Enable Row Level Security
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for profiles
+CREATE POLICY "Users can view their own profile"
+  ON profiles FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own profile"
+  ON profiles FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own profile"
+  ON profiles FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own profile"
+  ON profiles FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- Trigger to update updated_at timestamp for profiles
+CREATE OR REPLACE FUNCTION update_profiles_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_profiles_updated_at
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_profiles_updated_at();
+
 -- Meals table
 CREATE TABLE IF NOT EXISTS meals (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -112,3 +167,55 @@ CREATE TRIGGER update_meals_updated_at
   BEFORE UPDATE ON meals
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
+
+-- Weight Entries Table
+-- This table stores individual weight log entries with dates
+CREATE TABLE IF NOT EXISTS weight_entries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  weight numeric NOT NULL,
+  date date NOT NULL,
+  note text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Create index for better query performance
+CREATE INDEX IF NOT EXISTS weight_entries_user_id_idx ON weight_entries(user_id);
+CREATE INDEX IF NOT EXISTS weight_entries_date_idx ON weight_entries(date);
+CREATE INDEX IF NOT EXISTS weight_entries_user_date_idx ON weight_entries(user_id, date);
+
+-- Enable Row Level Security
+ALTER TABLE weight_entries ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for weight_entries table
+CREATE POLICY "Users can view their own weight entries"
+  ON weight_entries FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own weight entries"
+  ON weight_entries FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own weight entries"
+  ON weight_entries FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own weight entries"
+  ON weight_entries FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- Trigger to update updated_at timestamp for weight_entries
+CREATE OR REPLACE FUNCTION update_weight_entries_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_weight_entries_updated_at
+  BEFORE UPDATE ON weight_entries
+  FOR EACH ROW
+  EXECUTE FUNCTION update_weight_entries_updated_at();

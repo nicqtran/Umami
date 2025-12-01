@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { deleteMeal as deleteMealFromStore, FoodItem, getMeals, updateMealFoods, updateMealMeta } from '@/state/meals';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -32,6 +33,10 @@ type BreakdownItem = {
   quantity: string;
 };
 
+const isUuid = (value?: string) =>
+  typeof value === 'string' &&
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+
 const background = '#F8F9FB';
 const card = '#FFFFFF';
 const border = '#E6E8EB';
@@ -43,6 +48,7 @@ export default function MealDetailsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
   const { dayId, mealId } = useLocalSearchParams<{ dayId?: string; mealId?: string }>();
+  const { user } = useSupabaseAuth();
 
   const [fontsLoaded] = useFonts({
     Inter_300Light,
@@ -166,7 +172,7 @@ export default function MealDetailsScreen() {
   const pushSnapshot = useCallback(
     (items: BreakdownItem[], snapshotTotals: ReturnType<typeof computeTotals>, nameValue: string) => {
       latestDataRef.current = { breakdown: items, totals: snapshotTotals, mealName: nameValue };
-      if (dayId && mealId) {
+      if (dayId && mealId && user?.id && isUuid(user.id) && isUuid(mealId)) {
         const payload = {
           dayId,
           mealId,
@@ -176,11 +182,11 @@ export default function MealDetailsScreen() {
           fat: snapshotTotals.fat,
         };
         DeviceEventEmitter.emit('mealUpdated', payload);
-        updateMealMeta(mealId, { name: nameValue });
-        updateMealFoods(mealId, items as FoodItem[]);
+        updateMealMeta(user.id, mealId, { name: nameValue });
+        updateMealFoods(user.id, mealId, items as FoodItem[]);
       }
     },
-    [dayId, mealId],
+    [dayId, mealId, user?.id],
   );
 
   const applySnapshot = useCallback(
@@ -216,9 +222,9 @@ export default function MealDetailsScreen() {
     setBreakdownItems([]);
     setCalories('0');
     setShowActions(false);
-    if (dayId && mealId) {
+    if (dayId && mealId && user?.id) {
       DeviceEventEmitter.emit('mealDeleted', { dayId, mealId });
-      deleteMealFromStore(mealId);
+      deleteMealFromStore(user.id, mealId);
     }
     router.replace('/(tabs)');
   };
@@ -226,47 +232,38 @@ export default function MealDetailsScreen() {
   const scaleItemsToCalories = (items: BreakdownItem[], targetCalories: number) => {
     const base = computeTotals(items).caloriesTotal;
     if (base <= 0 || !Number.isFinite(base)) {
-      if (!items.length) return items;
+      if (!items.length) {
+        // Seed a single aggregate item when the meal has no foods yet
+        return [
+          {
+            id: `auto-${Date.now()}`,
+            name: 'Total calories',
+            quantity: '1 serving',
+            calories: Math.max(0, Math.round(targetCalories)),
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+          },
+        ];
+      }
       const [first, ...rest] = items;
       return [{ ...first, calories: Math.max(0, Math.round(targetCalories)) }, ...rest];
     }
-    const ratio = targetCalories / base;
-    
-    // Scale all items with floating point precision first
-    const scaledItems = items.map((item) => ({
-      ...item,
-      calories: Math.max(0, item.calories * ratio),
-      protein: Math.max(0, item.protein * ratio),
-      carbs: Math.max(0, item.carbs * ratio),
-      fat: Math.max(0, item.fat * ratio),
-    }));
-    
-    // Round all items except the last one
-    const roundedItems = scaledItems.map((item, index) => {
-      if (index === scaledItems.length - 1) return item; // Keep last item unrounded for now
-      return {
-        ...item,
-        calories: Math.round(item.calories),
-        protein: Math.round(item.protein),
-        carbs: Math.round(item.carbs),
-        fat: Math.round(item.fat),
-      };
-    });
-    
-    // Adjust the last item to ensure the total matches exactly
-    if (roundedItems.length > 0) {
-      const sumWithoutLast = roundedItems.slice(0, -1).reduce((sum, item) => sum + item.calories, 0);
-      const lastItem = roundedItems[roundedItems.length - 1];
-      roundedItems[roundedItems.length - 1] = {
-        ...lastItem,
-        calories: Math.max(0, Math.round(targetCalories - sumWithoutLast)),
-        protein: Math.round(lastItem.protein),
-        carbs: Math.round(lastItem.carbs),
-        fat: Math.round(lastItem.fat),
+
+    // Keep macros unchanged; shift calorie delta onto the last item
+    const currentTotal = computeTotals(items).caloriesTotal;
+    const delta = targetCalories - currentTotal;
+    const nextItems = [...items];
+    if (nextItems.length > 0) {
+      const lastIndex = nextItems.length - 1;
+      const last = nextItems[lastIndex];
+      nextItems[lastIndex] = {
+        ...last,
+        calories: Math.max(0, Math.round(last.calories + delta)),
       };
     }
-    
-    return roundedItems;
+
+    return nextItems;
   };
 
   const startEditingCalories = () => {
@@ -344,38 +341,44 @@ export default function MealDetailsScreen() {
   };
 
   const scaleItemsToMacros = (items: BreakdownItem[], targetProtein: number, targetCarbs: number, targetFat: number) => {
-    const currentTotals = computeTotals(items);
     if (items.length === 0) return items;
+    const currentTotals = computeTotals(items);
+
+    // If no macros yet, place targets on the last item without touching calories
+    if (currentTotals.protein + currentTotals.carbs + currentTotals.fat === 0) {
+      const nextItems = [...items];
+      const lastIndex = nextItems.length - 1;
+      nextItems[lastIndex] = {
+        ...nextItems[lastIndex],
+        protein: Math.max(0, Math.round(targetProtein)),
+        carbs: Math.max(0, Math.round(targetCarbs)),
+        fat: Math.max(0, Math.round(targetFat)),
+      };
+      return nextItems;
+    }
 
     const proteinRatio = currentTotals.protein > 0 ? targetProtein / currentTotals.protein : 1;
     const carbsRatio = currentTotals.carbs > 0 ? targetCarbs / currentTotals.carbs : 1;
     const fatRatio = currentTotals.fat > 0 ? targetFat / currentTotals.fat : 1;
 
-    // Scale all items with floating point precision first
     const scaledItems = items.map((item) => ({
       ...item,
       protein: Math.max(0, item.protein * proteinRatio),
       carbs: Math.max(0, item.carbs * carbsRatio),
       fat: Math.max(0, item.fat * fatRatio),
+      // calories stay as-is
     }));
 
-    // Round all items except the last one
     const roundedItems = scaledItems.map((item, index) => {
-      if (index === scaledItems.length - 1) return item; // Keep last item unrounded for now
-      const newProtein = Math.round(item.protein);
-      const newCarbs = Math.round(item.carbs);
-      const newFat = Math.round(item.fat);
-      const newCalories = Math.round(newProtein * 4 + newCarbs * 4 + newFat * 9);
+      if (index === scaledItems.length - 1) return item; // Last item reserved for exact match
       return {
         ...item,
-        protein: newProtein,
-        carbs: newCarbs,
-        fat: newFat,
-        calories: newCalories,
+        protein: Math.round(item.protein),
+        carbs: Math.round(item.carbs),
+        fat: Math.round(item.fat),
       };
     });
 
-    // Adjust the last item to ensure totals match exactly
     if (roundedItems.length > 0) {
       const sumsWithoutLast = roundedItems.slice(0, -1).reduce(
         (acc, item) => ({
@@ -389,14 +392,12 @@ export default function MealDetailsScreen() {
       const lastProtein = Math.max(0, Math.round(targetProtein - sumsWithoutLast.protein));
       const lastCarbs = Math.max(0, Math.round(targetCarbs - sumsWithoutLast.carbs));
       const lastFat = Math.max(0, Math.round(targetFat - sumsWithoutLast.fat));
-      const lastCalories = Math.round(lastProtein * 4 + lastCarbs * 4 + lastFat * 9);
       
       roundedItems[roundedItems.length - 1] = {
         ...roundedItems[roundedItems.length - 1],
         protein: lastProtein,
         carbs: lastCarbs,
         fat: lastFat,
-        calories: lastCalories,
       };
     }
 
@@ -570,7 +571,7 @@ export default function MealDetailsScreen() {
                     />
                   </View>
                   <Text style={[styles.progressLabel, bodyFont]}>
-                    {Math.round((totals.caloriesTotal / dailyTotalCalories) * 100)}% of today's calories
+                    {Math.round((totals.caloriesTotal / dailyTotalCalories) * 100)}% of today&apos;s calories
                   </Text>
                 </View>
               )}

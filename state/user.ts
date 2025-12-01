@@ -9,7 +9,7 @@ export type UserProfile = {
   goalWeight?: number; // in lbs
   activityLevel?: 'sedentary' | 'light' | 'moderate' | 'active' | 'very-active';
   goalType?: 'lose' | 'maintain' | 'gain';
-  avatarUri?: string; // Local URI of the user's profile photo
+  avatarUri?: string | null; // URI for the user's profile photo (local while uploading, remote once stored)
   dateOfBirth?: string; // ISO date string (YYYY-MM-DD)
   biologicalSex?: BiologicalSex;
 };

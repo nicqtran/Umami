@@ -45,6 +45,10 @@ const toMealEntry = (row: MealWithFoods): MealEntry => ({
   })),
 });
 
+const isUuid = (value?: string) =>
+  typeof value === 'string' &&
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+
 export const fetchMealsForUser = async (userId: string): Promise<MealEntry[]> => {
   const { data, error } = await supabase
     .from('meals')
@@ -170,16 +174,19 @@ export const updateMealFoods = async (params: {
   userId: string;
   foods: FoodItem[];
 }): Promise<MealEntry> => {
-  const { mealId, userId, foods } = params;
+  const { mealId, userId, foods = [] } = params;
+
+  if (!mealId || !userId || !isUuid(mealId) || !isUuid(userId)) {
+    throw new Error('Invalid meal or user id');
+  }
 
   const { error: deleteError } = await supabase.from('food_items').delete().eq('meal_id', mealId);
 
   if (deleteError) throw deleteError;
 
   if (foods.length > 0) {
-    const { error: insertError } = await supabase.from('food_items').insert(
-      foods.map((f) => ({
-        id: f.id.startsWith('f') ? undefined : f.id,
+    const rows = foods.map((f) => {
+      const row: Record<string, unknown> = {
         meal_id: mealId,
         name: f.name,
         quantity: f.quantity,
@@ -187,8 +194,16 @@ export const updateMealFoods = async (params: {
         protein: f.protein,
         carbs: f.carbs,
         fat: f.fat,
-      }))
-    );
+      };
+
+      if (isUuid(f.id)) {
+        row.id = f.id;
+      }
+
+      return row;
+    });
+
+    const { error: insertError } = await supabase.from('food_items').insert(rows);
 
     if (insertError) throw insertError;
   }

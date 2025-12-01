@@ -53,19 +53,49 @@ export default function SignUpScreen() {
     }
     try {
       setSubmitting(true);
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password: password.trim(),
+        options: {
+          data: {
+            name: name.trim() || 'Friend',
+          },
+        },
       });
       if (error) {
         Alert.alert('Sign up failed', error.message);
         return;
       }
+
+      // Check if email confirmation is required
+      if (!data.session && data.user?.identities?.length === 0) {
+        Alert.alert(
+          'Email already registered',
+          'This email is already in use. Please log in instead.',
+          [{ text: 'Go to Login', onPress: () => router.replace('/login') }]
+        );
+        return;
+      }
+
+      if (!data.session) {
+        Alert.alert(
+          'Verify your email',
+          'Please check your email and click the verification link to activate your account, then log in.',
+          [{ text: 'Go to Login', onPress: () => router.replace('/login') }]
+        );
+        return;
+      }
+
+      // Session established successfully
       updateUserProfile({
         name: name.trim() || 'Friend',
         email: email.trim(),
       });
-      router.replace('/onboarding-flow');
+
+      // Give the auth state a moment to propagate
+      setTimeout(() => {
+        router.replace('/onboarding-flow');
+      }, 500);
     } finally {
       setSubmitting(false);
     }
