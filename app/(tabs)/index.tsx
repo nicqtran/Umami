@@ -1,7 +1,7 @@
-import { GoalsState, subscribeGoals } from '@/state/goals';
-import { MealEntry, addMeal, getDaysAgoId, subscribeMeals } from '@/state/meals';
-import { subscribeUserProfile, UserProfile } from '@/state/user';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { GoalsState, subscribeGoals } from '@/state/goals';
+import { addMeal, getDaysAgoId, MealEntry, subscribeMeals } from '@/state/meals';
+import { subscribeUserProfile, UserProfile } from '@/state/user';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -672,14 +672,9 @@ export default function HomeScreen() {
                       <View style={styles.macrosRow}>
                         {daySummary.macros.map((item: Macro) => (
                           <View key={item.label} style={styles.macroItem}>
-                            <View style={styles.macroHeader}>
-                              <View style={styles.macroLabelRow}>
-                                <View style={[styles.macroDot, { backgroundColor: item.color }]} />
-                                <Text style={[styles.macroLabel, bodyFont]}>{item.label}</Text>
-                              </View>
-                              <Text style={[styles.macroValue, semiFont]}>
-                                {item.current}/{item.goal}g
-                              </Text>
+                            <View style={styles.macroLabelRow}>
+                              <View style={[styles.macroDot, { backgroundColor: item.color }]} />
+                              <Text style={[styles.macroLabel, bodyFont]}>{item.label}</Text>
                             </View>
                             <View style={styles.macroBarBackground}>
                               <Animated.View
@@ -697,6 +692,10 @@ export default function HomeScreen() {
                                 ]}
                               />
                             </View>
+                            <Text style={[styles.macroValue, semiFont]}>
+                              {item.current}
+                              <Text style={styles.macroGoal}>/{item.goal}g</Text>
+                            </Text>
                           </View>
                         ))}
                       </View>
@@ -1031,49 +1030,50 @@ const styles = StyleSheet.create({
   macrosRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 16,
+    gap: 12,
     paddingTop: 8,
   },
   macroItem: {
     flex: 1,
-    gap: 9,
-  },
-  macroHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 6,
+    alignItems: 'flex-start',
   },
   macroLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   macroDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   macroLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: muted,
     fontWeight: '500',
+    letterSpacing: 0.2,
   },
   macroValue: {
-    fontSize: 13,
+    fontSize: 14,
     color: text,
     fontWeight: '600',
   },
+  macroGoal: {
+    fontSize: 12,
+    color: muted,
+    fontWeight: '400',
+  },
   macroBarBackground: {
-    height: 10,
-    borderRadius: 6,
+    width: '100%',
+    height: 6,
+    borderRadius: 3,
     backgroundColor: '#EEF1F5',
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E3E7ED',
   },
   macroBarFill: {
     height: '100%',
-    borderRadius: 6,
+    borderRadius: 3,
   },
   pagination: {
     flexDirection: 'row',

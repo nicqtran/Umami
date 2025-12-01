@@ -1342,7 +1342,10 @@ function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Da
 
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
       const dayId = getDayIdForDate(dayNum);
-      const hasMeals = meals.some(meal => meal.dayId === dayId);
+      // Check both exact match and trimmed match for dayId
+      const hasMeals = meals.some(meal => 
+        meal.dayId === dayId || meal.dayId?.trim() === dayId
+      );
       if (hasMeals) {
         logs.add(dayNum);
       }
@@ -1354,13 +1357,21 @@ function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Da
   // Compute which days have weight entries
   const daysWithWeight = useMemo(() => {
     const weights = new Set<number>();
+    
+    // Create a Set of all dates that have weight entries for faster lookup
+    const allWeightDates = new Set(weightEntries.map(e => e.date?.trim()));
 
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
       const dateStr = getDayIdForDate(dayNum);
-      const hasWeight = weightEntries.some(entry => entry.date === dateStr);
-      if (hasWeight) {
+      // Check if this date exists in the weight entries
+      if (allWeightDates.has(dateStr)) {
         weights.add(dayNum);
       }
+    }
+    
+    // Debug logging
+    if (weights.size > 0) {
+      console.log(`📅 Calendar ${year}-${month + 1}: ${weights.size} days with weight entries`);
     }
 
     return weights;
@@ -1441,6 +1452,8 @@ function DayCell({
     });
   };
 
+  const showIndicators = !isToday && (hasLog || hasWeight);
+
   return (
     <View style={styles.dayCellWrapper}>
       <Pressable onPress={handlePress} style={styles.dayCellPressable}>
@@ -1456,16 +1469,20 @@ function DayCell({
           >
             {day}
           </Text>
-          {/* Log dot inside the circle for today */}
-          {hasLog && isToday && <View style={styles.logDotInside} />}
-          {/* Weight indicator inside the circle for today */}
-          {hasWeight && isToday && !hasLog && <View style={styles.weightDotInside} />}
         </View>
-        {/* Log dot below for other days */}
-        {hasLog && !isToday && <View style={styles.logDot} />}
-        {/* Weight indicator below for other days */}
-        {hasWeight && !isToday && (
-          <View style={[styles.weightDot, hasLog && styles.weightDotWithLog]} />
+        {/* Centered indicator row below the number */}
+        {showIndicators && (
+          <View style={styles.indicatorRow}>
+            {hasLog && <View style={styles.mealDot} />}
+            {hasWeight && <View style={styles.weightDot} />}
+          </View>
+        )}
+        {/* For today, show a subtle indicator inside */}
+        {isToday && (hasLog || hasWeight) && (
+          <View style={styles.todayIndicatorRow}>
+            {hasLog && <View style={styles.todayDot} />}
+            {hasWeight && <View style={styles.todayDot} />}
+          </View>
         )}
       </Pressable>
     </View>
@@ -1850,73 +1867,63 @@ const styles = StyleSheet.create({
   },
   dayCellWrapper: {
     width: '14.2857%', // Exactly 1/7 of container width
-    aspectRatio: 1,
+    aspectRatio: 0.9, // Slightly taller to fit indicators
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 4,
   },
   dayCellPressable: {
-    width: '100%',
-    height: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dayCell: {
-    width: '14.2857%', // Exactly 1/7 = 14.2857%
-    aspectRatio: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 2,
+    justifyContent: 'flex-start',
   },
   dayContent: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
   dayNumber: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '400',
     textAlign: 'center',
   },
   todayBadge: {
     backgroundColor: COLORS.todayBadge,
   },
-  logDot: {
-    position: 'absolute',
-    bottom: 4,
+  indicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    marginTop: 3,
+    height: 6,
+  },
+  mealDot: {
     width: 5,
     height: 5,
     borderRadius: 2.5,
     backgroundColor: COLORS.logIndicator,
   },
-  logDotInside: {
-    position: 'absolute',
-    bottom: 4,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.7)',
-  },
   weightDot: {
-    position: 'absolute',
-    bottom: 4,
-    right: 8,
     width: 5,
     height: 5,
     borderRadius: 2.5,
     backgroundColor: COLORS.accent,
   },
-  weightDotWithLog: {
-    right: 16,
-  },
-  weightDotInside: {
+  todayIndicatorRow: {
     position: 'absolute',
-    bottom: 4,
-    right: 6,
+    bottom: -8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  todayDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    backgroundColor: COLORS.accent,
+    opacity: 0.6,
   },
 });
