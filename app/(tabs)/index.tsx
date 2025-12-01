@@ -462,17 +462,20 @@ export default function HomeScreen() {
 
     activeDay.macros.forEach((macro) => {
       if (!macroBarAnims[macro.label]) {
-        macroBarAnims[macro.label] = new Animated.Value(0);
+        macroBarAnims[macro.label] = new Animated.Value(macro.percentage);
+        return; // First time, no animation needed
       }
 
+      // Stop any ongoing animation, then animate from current value to new value
+      macroBarAnims[macro.label].stopAnimation();
       Animated.timing(macroBarAnims[macro.label], {
         toValue: macro.percentage,
-        duration: 450,
-        easing: Easing.out(Easing.cubic),
+        duration: 400,
+        easing: Easing.inOut(Easing.quad),
         useNativeDriver: false,
       }).start();
     });
-  }, [activeDay, macroBarAnims]);
+  }, [activeDay?.id]); // Only trigger when day ID changes
 
   const currentMeals = meals
     .filter((meal) => meal.dayId === activeDay?.id)
