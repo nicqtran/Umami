@@ -1,18 +1,89 @@
 import { useFonts, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
-import { Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
+import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri } from 'expo-auth-session';
+import { supabase } from '@/lib/supabase';
+
+// Required for web browser auth to complete properly
+WebBrowser.maybeCompleteAuthSession();
 
 const background = '#f5f6fa';
 const navy = '#3f5a6d';
 
 export default function OnboardingScreen() {
   const router = useRouter();
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [fontsLoaded] = useFonts({
     Inter_600SemiBold,
     Inter_700Bold,
   });
+
+  // Handle Google Sign-In
+  const handleGoogleSignIn = async () => {
+    try {
+      setGoogleLoading(true);
+      
+      const redirectUri = makeRedirectUri({
+        scheme: 'umami',
+        path: 'auth/callback',
+      });
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUri,
+          skipBrowserRedirect: true,
+        },
+      });
+
+      if (error) {
+        Alert.alert('Error', error.message);
+        return;
+      }
+
+      if (!data.url) {
+        Alert.alert('Error', 'Could not get authentication URL');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(
+        data.url,
+        redirectUri,
+        { showInRecents: true }
+      );
+
+      if (result.type === 'success' && result.url) {
+        const url = new URL(result.url);
+        const params = new URLSearchParams(url.hash.substring(1));
+        
+        const accessToken = params.get('access_token');
+        const refreshToken = params.get('refresh_token');
+
+        if (accessToken) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken || '',
+          });
+
+          if (sessionError) {
+            Alert.alert('Error', sessionError.message);
+            return;
+          }
+
+          // Navigate to onboarding flow for new users or main app
+          router.replace('/(tabs)');
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Google sign-in failed');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -41,14 +112,27 @@ export default function OnboardingScreen() {
           </Pressable>
 
           <Pressable
-            onPress={() => Alert.alert('Google Sign-In', 'Connect your Google auth flow here.')}
-            style={({ pressed }) => [styles.googleButton, pressed && styles.buttonPressed]}>
-            <View style={styles.googleGlyph}>
-              <Text style={[styles.googleGlyphText, fontsLoaded && styles.googleGlyphLoaded]}>G</Text>
-            </View>
-            <Text style={[styles.googleLabel, fontsLoaded && styles.googleLabelLoaded]}>
-              Continue with Google
-            </Text>
+            onPress={handleGoogleSignIn}
+            disabled={googleLoading}
+            style={({ pressed }) => [
+              styles.googleButton, 
+              pressed && styles.buttonPressed,
+              googleLoading && styles.buttonDisabled
+            ]}>
+            {googleLoading ? (
+              <ActivityIndicator size="small" color={navy} />
+            ) : (
+              <>
+                <Image
+                  source={{ uri: 'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' }}
+                  style={styles.googleIcon}
+                  contentFit="contain"
+                />
+                <Text style={[styles.googleLabel, fontsLoaded && styles.googleLabelLoaded]}>
+                  Continue with Google
+                </Text>
+              </>
+            )}
           </Pressable>
         </View>
       </View>
@@ -114,6 +198,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     justifyContent: 'center',
+    minHeight: 52,
+  },
+  googleIcon: {
+    width: 20,
+    height: 20,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   primaryLabel: {
     fontSize: 18,

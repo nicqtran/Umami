@@ -10,12 +10,14 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.nicolastran.umami",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to let you select meal photos.",
         "NSCameraUsageDescription": "This app needs access to your camera to let you take photos of your meals."
       }
     },
     "android": {
+      "package": "com.nicolastran.umami",
       "adaptiveIcon": {
         "backgroundColor": "#ECEEEF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -49,7 +51,8 @@
           "photosPermission": "This app needs access to your photo library to let you select meal photos.",
           "cameraPermission": "This app needs access to your camera to let you take photos of your meals."
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
