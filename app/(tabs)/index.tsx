@@ -11,6 +11,9 @@ import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Easing, FlatList, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 type Macro = { label: string; value: string; color: string; current: number; goal: number; percentage: number };
 type Meal = { id: string; name: string; time: string; calories: string; macros: string; image: number | { uri: string } };
@@ -177,6 +180,7 @@ export default function HomeScreen() {
   // Animation refs for calorie card entrance
   const cardEntranceAnim = useRef(new Animated.Value(0)).current;
   const macroBarAnims = useRef<Record<string, Animated.Value>>({}).current;
+  const calorieProgressAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const unsubscribe = subscribeUserProfile(setUserProfile);
@@ -448,15 +452,16 @@ export default function HomeScreen() {
     mealsFadeAnim.setValue(0);
     Animated.timing(mealsFadeAnim, {
       toValue: 1,
-      duration: 300,
-      easing: Easing.out(Easing.cubic),
+      duration: 150,
+      easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
   }, [activeIndex, mealsFadeAnim]);
 
   const activeDay = reversedDays[activeIndex] || reversedDays[reversedDays.length - 1];
 
-  // Smoothly animate macro fills when the active day changes
+  // Animate macro bars - reset to 0 and animate up to target (loading effect)
+  // Include calories in deps so animation triggers when data loads
   useEffect(() => {
     if (!activeDay) return;
 
@@ -465,14 +470,39 @@ export default function HomeScreen() {
         macroBarAnims[macro.label] = new Animated.Value(0);
       }
 
+      // Immediately reset to prevent showing stale value from previous day
+      macroBarAnims[macro.label].stopAnimation();
+      macroBarAnims[macro.label].setValue(0);
+      
+      // Start animation to target
       Animated.timing(macroBarAnims[macro.label], {
         toValue: macro.percentage,
-        duration: 450,
-        easing: Easing.out(Easing.cubic),
+        duration: 350,
+        easing: Easing.out(Easing.quad),
         useNativeDriver: false,
       }).start();
     });
-  }, [activeDay, macroBarAnims]);
+  }, [activeDay?.id, activeDay?.calories]);
+
+  // Animate calorie ring - reset to 0 and animate up to target (loading effect)
+  // Include calories in deps so animation triggers when data loads
+  useEffect(() => {
+    if (!activeDay) return;
+    
+    const targetPercent = Math.min(activeDay.percentage, 100);
+    
+    // Immediately reset to prevent showing stale value from previous day
+    calorieProgressAnim.stopAnimation();
+    calorieProgressAnim.setValue(0);
+    
+    // Start animation to target
+    Animated.timing(calorieProgressAnim, {
+      toValue: targetPercent,
+      duration: 350,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  }, [activeDay?.id, activeDay?.calories]);
 
   const currentMeals = meals
     .filter((meal) => meal.dayId === activeDay?.id)
@@ -569,7 +599,7 @@ export default function HomeScreen() {
                 keyExtractor={(item) => item.id}
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                decelerationRate={0.95}
+                decelerationRate="fast"
                 initialScrollIndex={initialIndex + 1}
                 getItemLayout={getItemLayout}
                 contentContainerStyle={styles.summaryCarousel}
@@ -661,12 +691,61 @@ export default function HomeScreen() {
                         <Text style={[styles.summaryLabel, semiFont]}>{daySummary.label.toUpperCase()}</Text>
                       </View>
                       <View style={styles.caloriesBlock}>
-                        <Text style={[styles.calories, titleFont]}>
-                          {formatKcal(daySummary.calories)} / {formatKcal(daySummary.goal)} kcal
-                        </Text>
-                        <Text style={[styles.caloriesSub, bodyFont]}>
-                          Remaining {formatKcal(Math.max(daySummary.goal - daySummary.calories, 0))} kcal
-                        </Text>
+                        <View style={styles.caloriesRow}>
+                          {/* Calorie Info - Left */}
+                          <View style={styles.caloriesInfo}>
+                            <Text style={[styles.calorieValue, titleFont]}>
+                              {formatKcal(daySummary.calories)}
+                            </Text>
+                            <Text style={[styles.calorieUnit, bodyFont]}>
+                              of {formatKcal(daySummary.goal)} kcal
+                            </Text>
+                            <Text style={[styles.remainingText, semiFont]}>
+                              {formatKcal(Math.max(daySummary.goal - daySummary.calories, 0))} remaining
+                            </Text>
+                          </View>
+                          
+                          {/* Circular Progress - Right */}
+                          <View style={styles.progressRingContainer}>
+                            <Svg width={110} height={110} style={styles.progressRingSvg}>
+                              {/* Background circle */}
+                              <Circle
+                                cx={55}
+                                cy={55}
+                                r={46}
+                                stroke="#EAECEF"
+                                strokeWidth={7}
+                                fill="none"
+                              />
+                              {/* Progress circle */}
+                              <AnimatedCircle
+                                cx={55}
+                                cy={55}
+                                r={46}
+                                stroke={daySummary.percentage >= 100 ? '#D4A574' : accent}
+                                strokeWidth={7}
+                                fill="none"
+                                strokeDasharray={`${2 * Math.PI * 46}`}
+                                strokeDashoffset={
+                                  isActiveCard
+                                    ? calorieProgressAnim.interpolate({
+                                        inputRange: [0, 100],
+                                        outputRange: [2 * Math.PI * 46, 0],
+                                      })
+                                    : 2 * Math.PI * 46 * (1 - Math.min(daySummary.percentage, 100) / 100)
+                                }
+                                strokeLinecap="round"
+                                transform="rotate(-90 55 55)"
+                              />
+                            </Svg>
+                            <View style={styles.progressRingCenter}>
+                              <Text style={[styles.progressPercent, titleFont]}>
+                                {Math.round(daySummary.percentage)}
+                              </Text>
+                              <Text style={[styles.progressPercentSymbol, bodyFont]}>%</Text>
+                            </View>
+                          </View>
+                        </View>
                       </View>
                       <View style={styles.macrosRow}>
                         {daySummary.macros.map((item: Macro) => (
@@ -720,7 +799,7 @@ export default function HomeScreen() {
             <View style={styles.mealsHeader}>
               <Text style={[styles.sectionTitle, semiFont]}>{`${activeDay?.label || 'Today'}'s meals`}</Text>
               <View style={styles.remainingPill}>
-                <Text style={styles.remainingText}>{formatKcal(remainingCalories)} kcal left</Text>
+                <Text style={styles.remainingPillText}>{formatKcal(remainingCalories)} kcal left</Text>
               </View>
             </View>
             <View style={styles.mealsList}>
@@ -967,8 +1046,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: border,
-    padding: 28,
-    gap: 20,
+    padding: 24,
+    gap: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.06,
@@ -1002,27 +1081,69 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   caloriesBlock: {
-    gap: 6,
-    paddingVertical: 4,
+    paddingVertical: 2,
   },
-  calories: {
-    fontSize: 36,
+  caloriesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  caloriesInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  calorieValue: {
+    fontSize: 40,
     color: text,
     fontWeight: '700',
-    letterSpacing: -0.8,
-    lineHeight: 42,
+    letterSpacing: -1,
+    lineHeight: 46,
   },
-  caloriesSub: {
-    fontSize: 15,
+  calorieUnit: {
+    fontSize: 14,
     color: muted,
-    marginTop: 2,
+    fontWeight: '400',
     letterSpacing: 0.1,
+  },
+  remainingText: {
+    fontSize: 14,
+    color: accent,
+    fontWeight: '600',
+    marginTop: 6,
+    letterSpacing: 0.1,
+  },
+  progressRingContainer: {
+    width: 110,
+    height: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+    marginRight: 30,
+  },
+  progressRingSvg: {
+    position: 'absolute',
+  },
+  progressRingCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  progressPercent: {
+    fontSize: 24,
+    color: text,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+  },
+  progressPercentSymbol: {
+    fontSize: 14,
+    color: muted,
+    fontWeight: '400',
+    marginTop: 2,
   },
   macrosRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
-    paddingTop: 8,
+    paddingTop: 4,
   },
   macroItem: {
     flex: 1,
@@ -1113,7 +1234,7 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 1,
   },
-  remainingText: {
+  remainingPillText: {
     fontSize: 12.5,
     color: '#1B4F9C',
     fontWeight: '600',
