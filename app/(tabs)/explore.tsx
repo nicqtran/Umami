@@ -221,7 +221,7 @@ export default function LogScreen() {
     return sorted;
   }, [weightEntries]);
 
-  // Filter out any "future" entries (from timezone bugs) and get the latest valid entry
+  // Get the most recent weight entry (latest date, most recent timestamp for that date)
   const latestEntryByDate = useMemo(() => {
     if (weightEntries.length === 0) return null;
     
@@ -237,12 +237,25 @@ export default function LogScreen() {
     
     if (validEntries.length === 0) return null;
     
-    // Use T00:00:00 suffix to parse dates as local time, not UTC
-    return [...validEntries].sort((a, b) => {
-      const dateDiff = new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime();
-      if (dateDiff !== 0) return dateDiff;
-      return (b.timestamp || 0) - (a.timestamp || 0);
-    })[0];
+    // Group by date
+    const entriesByDate = new Map<string, WeightEntry[]>();
+    validEntries.forEach(entry => {
+      const existing = entriesByDate.get(entry.date) || [];
+      existing.push(entry);
+      entriesByDate.set(entry.date, existing);
+    });
+    
+    // Find the latest date
+    const sortedDates = Array.from(entriesByDate.keys()).sort((a, b) => 
+      new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
+    );
+    const latestDate = sortedDates[0];
+    
+    // Get the most recent entry for the latest date (by timestamp)
+    const latestDateEntries = entriesByDate.get(latestDate) || [];
+    const sorted = latestDateEntries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    
+    return sorted[0] || null;
   }, [weightEntries]);
 
   // Get valid entries only (filter out future dates)
@@ -767,32 +780,15 @@ function WeightGraph({
     }).start();
   }, [data]);
 
-  // Calculate weight change using actual entries (not graphed data which may have duplicates/filled days)
-  // Get entries that fall within the displayed date range
-  const entriesInDisplayRange = useMemo(() => {
-    if (!entries || entries.length === 0 || data.length === 0) return [];
-    
-    const minDisplayDate = Math.min(...data.map(d => d.date.getTime()));
-    const maxDisplayDate = Math.max(...data.map(d => d.date.getTime()));
-    
-    return entries
-      .filter(entry => {
-        const entryTime = new Date(entry.date + 'T00:00:00').getTime();
-        return entryTime >= minDisplayDate && entryTime <= maxDisplayDate;
-      })
-      // Use T00:00:00 suffix to parse dates as local time, not UTC
-      .sort((a, b) => new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime());
-  }, [entries, data]);
-
-  const latestSupabaseEntry = useMemo(() => {
+  // Get the actual current weight (most recent entry by date, then by timestamp) - used for "Current Weight" display
+  const actualCurrentWeight = useMemo(() => {
     if (!entries || entries.length === 0) return null;
     
-    // Get today's date in local time - filter out any "future" entries (from timezone bugs)
+    // Get today's date - filter out any "future" entries
     const today = new Date();
-    today.setHours(23, 59, 59, 999); // End of today
+    today.setHours(23, 59, 59, 999);
     const todayMs = today.getTime();
     
-    // Filter to only entries on or before today
     const validEntries = entries.filter(e => {
       const entryMs = new Date(e.date + 'T00:00:00').getTime();
       return entryMs <= todayMs;
@@ -800,13 +796,87 @@ function WeightGraph({
     
     if (validEntries.length === 0) return null;
     
-    // Use T00:00:00 suffix to parse dates as local time, not UTC
-    return [...validEntries].sort((a, b) => {
-      const dateDiff = new Date(b.date + 'T00:00:00').getTime() - new Date(a.date + 'T00:00:00').getTime();
-      if (dateDiff !== 0) return dateDiff;
-      return (b.timestamp || 0) - (a.timestamp || 0);
-    })[0];
+    // Group by date and get most recent entry for each date
+    const entriesByDate = new Map<string, WeightEntry[]>();
+    validEntries.forEach(entry => {
+      const existing = entriesByDate.get(entry.date) || [];
+      existing.push(entry);
+      entriesByDate.set(entry.date, existing);
+    });
+    
+    // Find the latest date
+    const sortedDates = Array.from(entriesByDate.keys()).sort((a, b) => 
+      new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
+    );
+    const latestDate = sortedDates[0];
+    
+    // Get the most recent entry for the latest date (by timestamp)
+    const latestDateEntries = entriesByDate.get(latestDate) || [];
+    const sorted = latestDateEntries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    
+    return sorted[0]?.weight ?? null;
   }, [entries]);
+
+  // Calculate weight change using actual entries in the displayed range
+  // For each unique date, get the most recent entry (by timestamp)
+  const { firstWeight, lastWeight, uniqueDatesCount } = useMemo(() => {
+    if (!entries || entries.length === 0 || data.length === 0) {
+      return { firstWeight: null, lastWeight: null, uniqueDatesCount: 0 };
+    }
+    
+    const minDisplayDate = Math.min(...data.map(d => d.date.getTime()));
+    const maxDisplayDate = Math.max(...data.map(d => d.date.getTime()));
+    
+    // Filter entries within the display range
+    const entriesInRange = entries.filter(entry => {
+      const entryTime = new Date(entry.date + 'T00:00:00').getTime();
+      return entryTime >= minDisplayDate && entryTime <= maxDisplayDate;
+    });
+    
+    if (entriesInRange.length === 0) {
+      return { firstWeight: null, lastWeight: null, uniqueDatesCount: 0 };
+    }
+    
+    // Group entries by date and get the most recent entry for each date
+    const entriesByDate = new Map<string, WeightEntry[]>();
+    entriesInRange.forEach(entry => {
+      const existing = entriesByDate.get(entry.date) || [];
+      existing.push(entry);
+      entriesByDate.set(entry.date, existing);
+    });
+    
+    // For each date, get the most recent entry by timestamp
+    const mostRecentByDate = new Map<string, WeightEntry>();
+    entriesByDate.forEach((dateEntries, date) => {
+      const sorted = dateEntries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      mostRecentByDate.set(date, sorted[0]);
+    });
+    
+    // Get unique dates sorted chronologically
+    const sortedDates = Array.from(mostRecentByDate.keys()).sort((a, b) => 
+      new Date(a + 'T00:00:00').getTime() - new Date(b + 'T00:00:00').getTime()
+    );
+    
+    const firstDate = sortedDates[0];
+    const lastDate = sortedDates[sortedDates.length - 1];
+    
+    const firstEntry = mostRecentByDate.get(firstDate);
+    const lastEntry = mostRecentByDate.get(lastDate);
+    
+    console.log('📊 Weight change calculation:', {
+      firstDate,
+      firstWeight: firstEntry?.weight,
+      lastDate,
+      lastWeight: lastEntry?.weight,
+      uniqueDates: sortedDates.length
+    });
+    
+    return {
+      firstWeight: firstEntry?.weight ?? null,
+      lastWeight: lastEntry?.weight ?? null,
+      uniqueDatesCount: sortedDates.length
+    };
+  }, [entries, data]);
 
   if (data.length === 0) {
     return (
@@ -863,14 +933,15 @@ function WeightGraph({
   const lastX = points[points.length - 1].x;
   const areaPathData = `${pathData} L ${lastX} ${graphHeight} L ${firstX} ${graphHeight} Z`;
 
-  // Use actual entries for comparison: first logged entry vs most recent logged entry in period
-  const firstActualWeight = entriesInDisplayRange.length > 0 ? entriesInDisplayRange[0].weight : weights[0];
-  const latestActualWeight = latestSupabaseEntry?.weight ?? (entriesInDisplayRange.length > 0
-    ? entriesInDisplayRange[entriesInDisplayRange.length - 1].weight
-    : weights[weights.length - 1]);
-  const weightChange = latestActualWeight - firstActualWeight;
-  const percentChange = firstActualWeight > 0 ? (weightChange / firstActualWeight) * 100 : 0;
-  const hasMultipleEntries = entriesInDisplayRange.length > 1;
+  // Current weight = actual most recent weight (displayed in header)
+  const currentWeight = actualCurrentWeight ?? weights[weights.length - 1];
+  
+  // Change calculation = first date vs last date in the SELECTED range
+  const firstRangeWeight = firstWeight ?? weights[0];
+  const lastRangeWeight = lastWeight ?? weights[weights.length - 1];
+  const weightChange = lastRangeWeight - firstRangeWeight;
+  const percentChange = firstRangeWeight > 0 ? (weightChange / firstRangeWeight) * 100 : 0;
+  const hasMultipleEntries = uniqueDatesCount > 1;
 
   return (
     <Animated.View
@@ -895,7 +966,7 @@ function WeightGraph({
             Current Weight
           </Text>
           <Text style={[TYPOGRAPHY.hero, { color: COLORS.text, fontSize: 28 }]}>
-            {latestActualWeight.toFixed(1)} lbs
+            {currentWeight.toFixed(1)} lbs
           </Text>
         </View>
         <View style={styles.changeContainer}>
