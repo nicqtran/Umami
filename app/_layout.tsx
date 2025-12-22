@@ -7,6 +7,7 @@ import { ToastProvider } from '@/components/toast-provider';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { fetchProfile } from '@/services/profile';
+import { clearAccessStatusState, refreshAccessStatusState } from '@/state/access';
 import { loadMealsFromDb } from '@/state/meals';
 import { loadWeightEntriesFromDb } from '@/state/weight-log';
 import { useEffect, useRef } from 'react';
@@ -23,6 +24,11 @@ export default function RootLayout() {
 
   useEffect(() => {
     const loadUserData = async () => {
+      if (!user) {
+        clearAccessStatusState();
+        return;
+      }
+
       if (user && fetchedUserIdRef.current !== user.id) {
         fetchedUserIdRef.current = user.id;
         try {
@@ -30,6 +36,7 @@ export default function RootLayout() {
             fetchProfile(user.id),
             loadWeightEntriesFromDb(user.id),
             loadMealsFromDb(user.id),
+            refreshAccessStatusState(),
           ]);
         } catch (e) {
           console.warn('Failed to load user data', e);
@@ -80,6 +87,10 @@ export default function RootLayout() {
           />
           <Stack.Screen
             name="day-details"
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="upgrade"
             options={{ headerShown: false }}
           />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />

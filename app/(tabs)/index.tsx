@@ -2,7 +2,9 @@ import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { analyzeFoodImage } from '@/services/food-analysis';
 import { GoalsState, subscribeGoals } from '@/state/goals';
 import { addMeal, FoodItem, getDaysAgoId, MealEntry, subscribeMeals } from '@/state/meals';
+import { refreshAccessStatusState, setAccessStatusState, subscribeAccessStatus } from '@/state/access';
 import { subscribeUserProfile, UserProfile } from '@/state/user';
+import { AccessStatus } from '@/types/access';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -248,6 +250,7 @@ export default function HomeScreen() {
   );
   const [meals, setMeals] = useState<MealEntry[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
 
   const days = useMemo<DaySummary[]>(() => {
     return initialDayMeta.map((meta) => {
@@ -350,6 +353,11 @@ export default function HomeScreen() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeAccessStatus(setAccessStatus);
+    return () => unsubscribe();
+  }, []);
+
   // Camera action sheet and scanning state
   const [showCameraSheet, setShowCameraSheet] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -360,6 +368,13 @@ export default function HomeScreen() {
   const scanProgress = useRef(new Animated.Value(0)).current;
   const sheetSlideAnim = useRef(new Animated.Value(0)).current;
   const mealsFadeAnim = useRef(new Animated.Value(0)).current;
+
+  const resetScanUi = useCallback(() => {
+    setIsScanning(false);
+    setCapturedImageUri(null);
+    scanPulse.setValue(1);
+    scanProgress.setValue(0);
+  }, [scanPulse, scanProgress]);
 
   useEffect(() => {
     // Delayed entrance for smoother initial load
@@ -444,10 +459,7 @@ export default function HomeScreen() {
 
     // Create the meal - need user to be logged in
     if (!user?.id) {
-      setIsScanning(false);
-      setCapturedImageUri(null);
-      scanPulse.setValue(1);
-      scanProgress.setValue(0);
+      resetScanUi();
       Alert.alert('Not logged in', 'Please log in to add meals.');
       return;
     }
@@ -462,10 +474,30 @@ export default function HomeScreen() {
     if (analysisResult.success) {
       mealName = analysisResult.mealName || 'Scanned meal';
       foods = analysisResult.foods;
+      if (analysisResult.access) {
+        setAccessStatusState(analysisResult.access);
+      }
     } else {
-      // Show error but still allow manual entry
+      if (analysisResult.access) {
+        setAccessStatusState(analysisResult.access);
+      }
+      if (analysisResult.access?.reason === 'daily_limit_reached' || analysisResult.state?.includes('LIMIT')) {
+        resetScanUi();
+        Alert.alert('Daily limit reached', 'You have hit your scan limit for today. Upgrade to Pro for more scans.');
+        router.push('/upgrade');
+        return;
+      }
+      // Analysis failed - don't create a meal, just show error and return to home
       console.warn('Food analysis failed:', analysisResult.error);
-      // Don't block meal creation - user can add foods manually
+      resetScanUi();
+      // Refresh access status to reflect the refunded scan
+      refreshAccessStatusState();
+      Alert.alert(
+        'Could not scan food',
+        analysisResult.error || 'We could not analyze this image. Please try again with a clearer photo of your meal.',
+        [{ text: 'OK' }]
+      );
+      return;
     }
 
     const newMealData = {
@@ -480,22 +512,16 @@ export default function HomeScreen() {
       const newMeal = await addMeal(user.id, newMealData);
 
       // Reset scanning state
-      setIsScanning(false);
-      setCapturedImageUri(null);
-      scanPulse.setValue(1);
-      scanProgress.setValue(0);
+      resetScanUi();
 
       // Navigate to meal details
       router.push({ pathname: '/meal-details', params: { dayId, mealId: newMeal.id } });
     } catch (error) {
       console.error('Failed to save meal:', error);
-      setIsScanning(false);
-      setCapturedImageUri(null);
-      scanPulse.setValue(1);
-      scanProgress.setValue(0);
+      resetScanUi();
       Alert.alert('Error', 'Failed to save meal. Please try again.');
     }
-  }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse, user]);
+  }, [reversedDays, activeIndex, router, startScanAnimation, scanProgress, scanPulse, user, resetScanUi]);
 
   // Smooth sheet close animation
   const closeSheetWithAnimation = useCallback(() => {
@@ -511,6 +537,30 @@ export default function HomeScreen() {
       });
     });
   }, [sheetSlideAnim]);
+
+  const guardScanAccess = useCallback(async () => {
+    if (!user) {
+      Alert.alert('Log in', 'Create an account to save your scans and progress.');
+      router.push('/signup');
+      return false;
+    }
+
+    const latest = await refreshAccessStatusState();
+    const status = latest ?? accessStatus;
+
+    if (!status || status.state === 'UNAUTHENTICATED') {
+      Alert.alert('Please try again', 'Unable to verify your access right now.');
+      return false;
+    }
+
+    if (status.remainingToday <= 0) {
+      Alert.alert('Daily limit reached', 'You have hit your scan limit for today. Upgrade to Pro for more scans.');
+      router.push({ pathname: '/upgrade', params: { reason: 'limit' } });
+      return false;
+    }
+
+    return true;
+  }, [accessStatus, refreshAccessStatusState, router, user]);
 
   // Handle taking a photo with camera
   const handleTakePhoto = useCallback(async () => {
@@ -597,8 +647,12 @@ export default function HomeScreen() {
   }, [processImage, isPickerActive, closeSheetWithAnimation]);
 
   // Open camera action sheet with animation
-  const handleSnapMeal = useCallback(() => {
+  const handleSnapMeal = useCallback(async () => {
     if (isPickerActive || showCameraSheet) return;
+
+    const allowed = await guardScanAccess();
+    if (!allowed) return;
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowCameraSheet(true);
     sheetSlideAnim.setValue(0);
@@ -609,7 +663,7 @@ export default function HomeScreen() {
       stiffness: 180,
       useNativeDriver: true,
     }).start();
-  }, [isPickerActive, showCameraSheet, sheetSlideAnim]);
+  }, [guardScanAccess, isPickerActive, showCameraSheet, sheetSlideAnim]);
 
   // Reset sheet animation when closed
   useEffect(() => {
@@ -686,17 +740,68 @@ export default function HomeScreen() {
   const bodyFont = fontsLoaded ? styles.bodyLoaded : null;
   const lightFont = fontsLoaded ? styles.lightLoaded : null;
 
+  const isPro = accessStatus?.state?.startsWith('PRO');
+  const isTrial = accessStatus?.state?.startsWith('TRIAL') && accessStatus?.state !== 'TRIAL_EXPIRED';
+
+  const planLabel = (() => {
+    if (!accessStatus) return '';
+    if (isPro) return 'PRO';
+    if (isTrial) {
+      const days = accessStatus.trialDaysLeft ?? null;
+      return days !== null ? `${days}d trial` : 'Trial';
+    }
+    if (accessStatus.state === 'TRIAL_EXPIRED') return 'Free';
+    return 'Free';
+  })();
+
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" backgroundColor={background} />
       <View style={styles.container}>
         <View style={styles.header}>
-          <View style={styles.headerSpacer} />
-          <Image
-            source={require('@/assets/images/umami logo.png')}
-            style={styles.headerLogo}
-            contentFit="contain"
-          />
+          {/* Centered logo */}
+          <View style={styles.headerLogoContainer}>
+            <Image
+              source={require('@/assets/images/umami logo.png')}
+              style={styles.headerLogo}
+              contentFit="contain"
+            />
+          </View>
+
+          {/* Left: Access pill */}
+          {accessStatus ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.accessPill,
+                isPro && styles.accessPillPro,
+                isTrial && styles.accessPillTrial,
+                pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
+              ]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push('/upgrade');
+              }}
+            >
+              {(isPro || isTrial) && (
+                <MaterialCommunityIcons
+                  name="crown"
+                  size={14}
+                  color={isPro ? '#D8A648' : '#2C3E50'}
+                  style={{ marginRight: 5 }}
+                />
+              )}
+              <Text style={[
+                styles.accessPillLabel,
+                semiFont,
+                isPro && styles.accessPillLabelPro,
+              ]} numberOfLines={1}>{planLabel}</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.headerSpacer} />
+          )}
+
+          {/* Right: Avatar */}
           <Pressable
             style={({ pressed }) => [
               styles.avatar,
@@ -1103,6 +1208,7 @@ export default function HomeScreen() {
             </View>
           </View>
         </Modal>
+
       </View>
     </SafeAreaView>
   );
@@ -1124,6 +1230,14 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     paddingBottom: 16,
   },
+  headerLogoContainer: {
+    position: 'absolute',
+    left: -12,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+  },
   headerLogo: {
     width: 52,
     height: 52,
@@ -1132,6 +1246,43 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 40,
     height: 40,
+  },
+  accessPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderColor: border,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+    zIndex: 1,
+  },
+  accessPillPro: {
+    backgroundColor: '#FDF8EE',
+    borderColor: '#E8D5B5',
+    shadowColor: '#D8A648',
+    shadowOpacity: 0.12,
+  },
+  accessPillTrial: {
+    backgroundColor: '#F0F4F8',
+    borderColor: '#D8DEE6',
+  },
+  accessPillLabel: {
+    color: muted,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  accessPillLabelPro: {
+    color: '#B8860B',
+    fontWeight: '700',
+    letterSpacing: 0.8,
   },
   avatar: {
     width: 40,

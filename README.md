@@ -84,6 +84,25 @@ supabase functions deploy analyze-food
 
 That's it! Your API key is now securely stored on Supabase's servers, not in your app.
 
+#### Step 7: Add billing + usage guardrails
+
+1) Run `billing-and-usage.sql` in the Supabase SQL Editor to create:
+   - `billing_profiles` (subscription + trial metadata with timezone)
+   - `usage_counters` (per-day scan counts)
+   - Server-side helpers to enforce limits atomically
+
+2) Add the service role key for Edge Functions so they can increment usage safely (note: secret names cannot start with `SUPABASE_`):
+```bash
+supabase secrets set SERVICE_ROLE_KEY=your_service_role_key
+```
+
+3) Deploy the new access function (and re-deploy `analyze-food` to pick up the gating changes):
+```bash
+supabase functions deploy access-status analyze-food
+```
+
+The server now enforces: free users get 2 scans/day, trial/pro get 10/day, trial lasts 14 days (one per user), and every scan request is verified before the AI runs.
+
 ### 4. Start the app
 
 ```bash
