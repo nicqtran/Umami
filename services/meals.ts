@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase';
 import { FoodItem, MealEntry } from '@/state/meals';
 
+const MEAL_IMAGES_BUCKET = 'meal-images';
+
 type SupabaseMealRow = {
   id: string;
   user_id: string;
@@ -49,6 +51,46 @@ const isUuid = (value?: string) =>
   typeof value === 'string' &&
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
 
+const isRemoteUrl = (url?: string | null) => {
+  if (!url) return false;
+  return /^https?:\/\//.test(url);
+};
+
+/**
+ * Upload a meal image to Supabase Storage and return the public URL.
+ * If the image is already a remote URL, return it as-is.
+ */
+export const uploadMealImage = async (userId: string, imageUri: string): Promise<string> => {
+  // If already a remote URL, return as-is
+  if (isRemoteUrl(imageUri)) {
+    return imageUri;
+  }
+
+  const response = await fetch(imageUri);
+  if (!response.ok) {
+    throw new Error('Unable to read image file for upload');
+  }
+
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const extensionFromType = contentType.split('/').pop() || 'jpg';
+  const extensionFromUri = imageUri.split('.').pop()?.split('?')[0]; // Handle query params
+  const extension = extensionFromUri && extensionFromUri.length <= 4 ? extensionFromUri : extensionFromType;
+
+  const arrayBuffer = await response.arrayBuffer();
+  const fileData = new Uint8Array(arrayBuffer);
+
+  const filePath = `${userId}/${Date.now()}.${extension}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(MEAL_IMAGES_BUCKET)
+    .upload(filePath, fileData, { contentType, upsert: true });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicData } = supabase.storage.from(MEAL_IMAGES_BUCKET).getPublicUrl(filePath);
+  return publicData.publicUrl;
+};
+
 export const fetchMealsForUser = async (userId: string): Promise<MealEntry[]> => {
   const { data, error } = await supabase
     .from('meals')
@@ -89,6 +131,16 @@ export const insertMeal = async (params: {
 }): Promise<MealEntry> => {
   const { userId, dayId, name, time, imageUri, foods } = params;
 
+  // Upload image to Supabase Storage if it's a local file
+  let finalImageUri: string | null = null;
+  if (imageUri) {
+    try {
+      finalImageUri = await uploadMealImage(userId, imageUri);
+    } catch (e) {
+      console.warn('Failed to upload meal image, saving without image:', e);
+    }
+  }
+
   const { data: mealData, error: mealError } = await supabase
     .from('meals')
     .insert([
@@ -97,7 +149,7 @@ export const insertMeal = async (params: {
         day_id: dayId,
         name,
         time,
-        image_uri: imageUri ?? null,
+        image_uri: finalImageUri,
       },
     ])
     .select()
@@ -147,7 +199,20 @@ export const updateMealMeta = async (params: {
   if (updates.name) payload.name = updates.name;
   if (updates.time) payload.time = updates.time;
   if (updates.dayId) payload.day_id = updates.dayId;
-  if (updates.imageUri !== undefined) payload.image_uri = updates.imageUri;
+  
+  // Upload image to Supabase Storage if it's a local file
+  if (updates.imageUri !== undefined) {
+    if (updates.imageUri) {
+      try {
+        payload.image_uri = await uploadMealImage(userId, updates.imageUri);
+      } catch (e) {
+        console.warn('Failed to upload meal image:', e);
+        // Keep the existing image if upload fails
+      }
+    } else {
+      payload.image_uri = null; // Explicitly removing the image
+    }
+  }
 
   const { data: mealData, error: mealError } = await supabase
     .from('meals')
