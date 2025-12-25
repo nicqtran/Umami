@@ -79,9 +79,15 @@ const notify = () => {
 
 export const getMeals = () => meals;
 
-export const loadMealsFromDb = async (userId: string): Promise<void> => {
+/**
+ * Load meals from the database.
+ * @param userId - The user's ID
+ * @param limitToDate - Optional date string (YYYY-MM-DD) to limit history.
+ *                      Free users should only see the past month.
+ */
+export const loadMealsFromDb = async (userId: string, limitToDate?: string): Promise<void> => {
   try {
-    const fetchedMeals = await fetchMealsForUser(userId);
+    const fetchedMeals = await fetchMealsForUser(userId, limitToDate);
     meals = fetchedMeals;
     notify();
   } catch (error) {

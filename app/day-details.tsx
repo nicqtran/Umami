@@ -1,5 +1,7 @@
 import { deleteMeal, MealEntry, subscribeMeals } from '@/state/meals';
 import { loadWeightEntriesFromDb, subscribeWeightLog, WeightEntry } from '@/state/weight-log';
+import { subscribeAccessStatus } from '@/state/access';
+import { AccessStatus } from '@/types/access';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -49,6 +51,7 @@ export default function DayDetailsScreen() {
   const params = useLocalSearchParams<{ date: string; dayId?: string }>();
   const [meals, setMeals] = useState<MealEntry[]>([]);
   const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   
   // Parse the date from params
   const selectedDate = useMemo(() => {
@@ -81,6 +84,40 @@ export default function DayDetailsScreen() {
     const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     return dayNames[selected.getDay()];
   }, [selectedDate, params.dayId]);
+
+  // Subscribe to access status
+  useEffect(() => {
+    const unsubscribe = subscribeAccessStatus(setAccessStatus);
+    return () => unsubscribe();
+  }, []);
+
+  // Check if this date is locked for free users and redirect to upgrade
+  useEffect(() => {
+    if (accessStatus === null) return; // Still loading
+
+    // Note: TRIAL_EXPIRED and PRO_EXPIRED should NOT have full access
+    const isPro = accessStatus?.state?.startsWith('PRO') && accessStatus?.state !== 'PRO_EXPIRED';
+    const isTrial = accessStatus?.state?.startsWith('TRIAL') && accessStatus?.state !== 'TRIAL_EXPIRED';
+    const hasFullAccess = isPro || isTrial;
+
+    if (!hasFullAccess && params.date) {
+      // Calculate 30 days ago
+      const limitDate = new Date();
+      limitDate.setDate(limitDate.getDate() - 30);
+      limitDate.setHours(0, 0, 0, 0);
+
+      // Parse the selected date
+      const dateToCheck = new Date(params.date + 'T00:00:00');
+
+      if (dateToCheck < limitDate) {
+        console.log('🔒 Date locked - redirecting to upgrade');
+        router.replace({
+          pathname: '/upgrade',
+          params: { reason: 'history' }
+        });
+      }
+    }
+  }, [accessStatus, params.date, router]);
 
   // Subscribe to meals
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { upsertProfile } from '@/services/profile';
+import { subscribeAccessStatus } from '@/state/access';
 import { getGoals, GoalsState, subscribeGoals, updateGoals } from '@/state/goals';
 import { MealEntry, subscribeMeals } from '@/state/meals';
 import { getUserProfile, subscribeUserProfile, UserProfile } from '@/state/user';
@@ -11,6 +12,7 @@ import {
   updateWeightEntry,
   WeightEntry
 } from '@/state/weight-log';
+import { AccessStatus } from '@/types/access';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -172,7 +174,8 @@ export default function LogScreen() {
   const [goals, setGoals] = useState<GoalsState | null>(null);
   const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
   const [savingWeight, setSavingWeight] = useState(false);
-  
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
+
   // Weight log modal state
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState<WeightEntry | null>(null);
@@ -197,6 +200,11 @@ export default function LogScreen() {
 
   useEffect(() => {
     const unsubscribe = subscribeWeightLog(setWeightEntries);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeAccessStatus(setAccessStatus);
     return () => unsubscribe();
   }, []);
 
@@ -551,7 +559,7 @@ export default function LogScreen() {
         />
 
         {/* Calendar Month View */}
-        <CalendarView currentMonth={currentMonth} onMonthChange={setCurrentMonth} meals={meals} weightEntries={weightEntries} />
+        <CalendarView currentMonth={currentMonth} onMonthChange={setCurrentMonth} meals={meals} weightEntries={weightEntries} accessStatus={accessStatus} />
         
         {/* Spacer for bottom tab bar */}
         <View style={{ height: 100 }} />
@@ -1126,11 +1134,13 @@ function CalendarView({
   onMonthChange,
   meals,
   weightEntries,
+  accessStatus,
 }: {
   currentMonth: Date;
   onMonthChange: (date: Date) => void;
   meals: MealEntry[];
   weightEntries: WeightEntry[];
+  accessStatus: AccessStatus | null;
 }) {
   const screenWidth = Dimensions.get('window').width;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -1299,14 +1309,14 @@ function CalendarView({
             transform: [{ translateX }],
           }}
         >
-          <CalendarGrid currentMonth={currentMonth} meals={meals} weightEntries={weightEntries} />
+          <CalendarGrid currentMonth={currentMonth} meals={meals} weightEntries={weightEntries} accessStatus={accessStatus} />
         </Animated.View>
       </View>
     </View>
   );
 }
 
-function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Date; meals: MealEntry[]; weightEntries: WeightEntry[] }) {
+function CalendarGrid({ currentMonth, meals, weightEntries, accessStatus }: { currentMonth: Date; meals: MealEntry[]; weightEntries: WeightEntry[]; accessStatus: AccessStatus | null }) {
   const today = new Date();
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
@@ -1335,6 +1345,32 @@ function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Da
     calendarDate.setHours(0, 0, 0, 0);
     return formatDateLocal(calendarDate);
   };
+
+  // Determine if user is Pro/Trial (has full access)
+  // Wait for accessStatus to load before determining lock status
+  // Note: TRIAL_EXPIRED and PRO_EXPIRED should NOT have full access
+  const isPro = accessStatus?.state?.startsWith('PRO') && accessStatus?.state !== 'PRO_EXPIRED';
+  const isTrial = accessStatus?.state?.startsWith('TRIAL') && accessStatus?.state !== 'TRIAL_EXPIRED';
+  const hasFullAccess = isPro || isTrial;
+  // Only lock dates when we know user is NOT pro/trial (accessStatus loaded and user is free)
+  const isFreeUser = accessStatus !== null && !hasFullAccess;
+
+  // Debug logging
+  console.log('🔐 Calendar access check:', {
+    accessStatus: accessStatus?.state,
+    isPro,
+    isTrial,
+    hasFullAccess,
+    isFreeUser,
+  });
+
+  // Calculate the date limit for free users (30 days ago)
+  const limitDate = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }, []);
 
   // Compute which days have meal logs based on real meal data
   const daysWithLogs = useMemo(() => {
@@ -1403,6 +1439,11 @@ function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Da
           const hasLog = daysWithLogs.has(day);
           const hasWeight = daysWithWeight.has(day);
 
+          // Check if this date is locked for free users (older than 30 days)
+          const cellDate = new Date(year, month, day);
+          cellDate.setHours(0, 0, 0, 0);
+          const isLocked = isFreeUser && cellDate < limitDate;
+
           return (
             <DayCell
               key={`${monthKey}-${day}`}
@@ -1412,6 +1453,7 @@ function CalendarGrid({ currentMonth, meals, weightEntries }: { currentMonth: Da
               isToday={isToday}
               hasLog={hasLog}
               hasWeight={hasWeight}
+              isLocked={isLocked}
             />
           );
         })}
@@ -1426,7 +1468,8 @@ function DayCell({
   year,
   isToday,
   hasLog,
-  hasWeight
+  hasWeight,
+  isLocked,
 }: {
   day: number;
   month: number;
@@ -1434,6 +1477,7 @@ function DayCell({
   isToday: boolean;
   hasLog: boolean;
   hasWeight: boolean;
+  isLocked: boolean;
 }) {
   const router = useRouter();
 
@@ -1442,7 +1486,17 @@ function DayCell({
     selectedDate.setHours(0, 0, 0, 0);
 
     const dayId = formatDateLocal(selectedDate);
-    
+
+    // If locked, navigate to upgrade screen with history reason
+    if (isLocked) {
+      console.log('🔒 Day locked - navigating to upgrade');
+      router.push({
+        pathname: '/upgrade',
+        params: { reason: 'history' }
+      });
+      return;
+    }
+
     console.log('📅 Calendar tap - navigating to:', dayId);
 
     // Pass the date string directly to avoid timezone issues
@@ -1452,23 +1506,31 @@ function DayCell({
     });
   };
 
-  const showIndicators = !isToday && (hasLog || hasWeight);
+  const showIndicators = !isToday && !isLocked && (hasLog || hasWeight);
 
   return (
     <View style={styles.dayCellWrapper}>
       <Pressable onPress={handlePress} style={styles.dayCellPressable}>
-        <View style={[styles.dayContent, isToday && styles.todayBadge]}>
-          <Text
-            style={[
-              styles.dayNumber,
-              {
-                color: isToday ? '#FFFFFF' : COLORS.text,
-                fontWeight: isToday ? '500' : '400',
-              },
-            ]}
-          >
-            {day}
-          </Text>
+        <View style={[
+          styles.dayContent,
+          isToday && styles.todayBadge,
+          isLocked && styles.lockedDayContent,
+        ]}>
+          {isLocked ? (
+            <MaterialCommunityIcons name="lock" size={14} color={COLORS.textMuted} />
+          ) : (
+            <Text
+              style={[
+                styles.dayNumber,
+                {
+                  color: isToday ? '#FFFFFF' : COLORS.text,
+                  fontWeight: isToday ? '500' : '400',
+                },
+              ]}
+            >
+              {day}
+            </Text>
+          )}
         </View>
         {/* Centered indicator row below the number */}
         {showIndicators && (
@@ -1890,6 +1952,9 @@ const styles = StyleSheet.create({
   },
   todayBadge: {
     backgroundColor: COLORS.todayBadge,
+  },
+  lockedDayContent: {
+    backgroundColor: 'rgba(106, 113, 120, 0.08)',
   },
   indicatorRow: {
     flexDirection: 'row',

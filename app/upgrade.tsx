@@ -77,6 +77,7 @@ export default function UpgradeScreen() {
   const reasonText = useMemo(() => {
     if (params?.reason === 'limit') return "You hit today's free limit. Upgrade to keep scanning with priority AI.";
     if (params?.reason === 'expired') return 'Your trial ended. Stay on Pro for unlimited scans and fastest results.';
+    if (params?.reason === 'history') return 'Free users can only view the past 30 days. Upgrade to Pro for complete meal history access.';
     return 'Pro gives you the fastest, most accurate scans with priority AI and premium nutrition detail.';
   }, [params?.reason]);
 
@@ -292,18 +293,6 @@ export default function UpgradeScreen() {
 
               <View style={styles.featureCard}>
                 <View style={styles.featureIconContainer}>
-                  <MaterialCommunityIcons name="chart-timeline-variant" size={24} color={gold} />
-                </View>
-                <View style={styles.featureContent}>
-                  <Text style={styles.featureTitle}>Detailed Macro Breakdown</Text>
-                  <Text style={styles.featureDescription}>
-                    Full nutritional analysis including proteins, carbs, fats, fiber, and micronutrients.
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.featureCard}>
-                <View style={styles.featureIconContainer}>
                   <MaterialCommunityIcons name="shield-check" size={24} color={gold} />
                 </View>
                 <View style={styles.featureContent}>
@@ -467,14 +456,6 @@ export default function UpgradeScreen() {
                   <MaterialCommunityIcons name="rocket-launch" size={18} color={gold} />
                 </View>
                 <Text style={styles.proBenefitText}>Priority AI processing</Text>
-                <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
-              </View>
-
-              <View style={styles.proBenefitItem}>
-                <View style={styles.proBenefitIcon}>
-                  <MaterialCommunityIcons name="chart-timeline-variant" size={18} color={gold} />
-                </View>
-                <Text style={styles.proBenefitText}>Detailed macro breakdown</Text>
                 <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
               </View>
 

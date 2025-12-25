@@ -91,14 +91,21 @@ export const uploadMealImage = async (userId: string, imageUri: string): Promise
   return publicData.publicUrl;
 };
 
-export const fetchMealsForUser = async (userId: string): Promise<MealEntry[]> => {
-  const { data, error } = await supabase
+export const fetchMealsForUser = async (userId: string, limitToDate?: string): Promise<MealEntry[]> => {
+  let query = supabase
     .from('meals')
     .select(`
       *,
       food_items (*)
     `)
-    .eq('user_id', userId)
+    .eq('user_id', userId);
+
+  // If a date limit is provided, only fetch meals from that date onwards
+  if (limitToDate) {
+    query = query.gte('day_id', limitToDate);
+  }
+
+  const { data, error } = await query
     .order('day_id', { ascending: false })
     .order('created_at', { ascending: false });
 

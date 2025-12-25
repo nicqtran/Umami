@@ -8,7 +8,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { fetchProfile } from '@/services/profile';
 import { clearAccessStatusState, refreshAccessStatusState } from '@/state/access';
-import { loadMealsFromDb } from '@/state/meals';
+import { getDateId, loadMealsFromDb } from '@/state/meals';
 import { loadWeightEntriesFromDb } from '@/state/weight-log';
 import { useEffect, useRef } from 'react';
 import { Text, View } from 'react-native';
@@ -32,12 +32,27 @@ export default function RootLayout() {
       if (user && fetchedUserIdRef.current !== user.id) {
         fetchedUserIdRef.current = user.id;
         try {
-          await Promise.all([
+          // First, get access status to know if user is Pro
+          const [accessStatus] = await Promise.all([
+            refreshAccessStatusState(),
             fetchProfile(user.id),
             loadWeightEntriesFromDb(user.id),
-            loadMealsFromDb(user.id),
-            refreshAccessStatusState(),
           ]);
+
+          // Free users can only see past month of meal history
+          // Note: TRIAL_EXPIRED and PRO_EXPIRED should NOT have full access
+          const isPro = accessStatus?.state?.startsWith('PRO') && accessStatus?.state !== 'PRO_EXPIRED';
+          const isTrial = accessStatus?.state?.startsWith('TRIAL') && accessStatus?.state !== 'TRIAL_EXPIRED';
+          let mealHistoryLimit: string | undefined;
+
+          if (!isPro && !isTrial) {
+            // Limit to past 30 days for free users
+            const limitDate = new Date();
+            limitDate.setDate(limitDate.getDate() - 30);
+            mealHistoryLimit = getDateId(limitDate);
+          }
+
+          await loadMealsFromDb(user.id, mealHistoryLimit);
         } catch (e) {
           console.warn('Failed to load user data', e);
         }
