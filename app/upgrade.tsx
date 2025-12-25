@@ -7,13 +7,21 @@ import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+
+type PricingPlan = 'monthly' | 'yearly';
 
 const background = '#f5f6fa';
 const card = '#ffffff';
 const border = '#e4e6eb';
 const accent = '#2C3E50';
+const navy = '#1A2F4A';
+const navyLight = '#243B55';
 const muted = '#6A7178';
 const highlight = '#D8A648';
+const gold = '#D8A648';
+const goldLight = '#E8C57A';
+const goldDark = '#B8860B';
 
 export default function UpgradeScreen() {
   const router = useRouter();
@@ -22,6 +30,7 @@ export default function UpgradeScreen() {
   const [access, setAccess] = useState<AccessStatus | null>(null);
   const [meals, setMeals] = useState<MealEntry[]>([]);
   const [loadingTrial, setLoadingTrial] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<PricingPlan>('yearly');
 
   useEffect(() => {
     const unsubscribe = subscribeAccessStatus(setAccess);
@@ -118,8 +127,9 @@ export default function UpgradeScreen() {
     }
   };
 
-  const handleUpgrade = () => {
-    Alert.alert('Upgrade to Pro', 'In-app purchase flow goes here. Connect your store receipt validation to activate Pro.');
+  const handleUpgrade = (plan: PricingPlan = selectedPlan) => {
+    const priceText = plan === 'monthly' ? '$6.99/month' : '$59.99/year';
+    Alert.alert('Upgrade to Pro', `You selected the ${plan} plan (${priceText}). In-app purchase flow goes here. Connect your store receipt validation to activate Pro.`);
   };
 
   const handleRestore = () => {
@@ -218,112 +228,289 @@ export default function UpgradeScreen() {
         {/* Upgrade Section - Only show for non-Pro */}
         {!isPro && (
           <>
-            <View style={styles.heroCard}>
-              <Text style={styles.heroLabel}>UPGRADE</Text>
-              <Text style={styles.heroHeadline}>Smarter scans. Premium results.</Text>
-              <Text style={styles.heroSub}>{reasonText}</Text>
-              <View style={styles.priceRow}>
-                <Text style={styles.price}>$6.99</Text>
-                <Text style={styles.priceMeta}>/month • cancel anytime</Text>
+            {/* Premium Hero Card */}
+            <LinearGradient
+              colors={[navy, navyLight]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.premiumHero}
+            >
+              <View style={styles.premiumHeroContent}>
+                <View style={styles.crownBadge}>
+                  <MaterialCommunityIcons name="crown" size={24} color={gold} />
+                </View>
+                <Text style={styles.premiumHeroLabel}>UMAMI PRO</Text>
+                <Text style={styles.premiumHeroHeadline}>Unlock Your Full{'\n'}Nutrition Journey</Text>
+                <Text style={styles.premiumHeroSub}>{reasonText}</Text>
+                <View style={styles.premiumDivider} />
+                <View style={styles.premiumQuickStats}>
+                  <View style={styles.premiumQuickStat}>
+                    <Text style={styles.premiumQuickStatValue}>10</Text>
+                    <Text style={styles.premiumQuickStatLabel}>Daily Scans</Text>
+                  </View>
+                  <View style={styles.premiumQuickStatDivider} />
+                  <View style={styles.premiumQuickStat}>
+                    <Text style={styles.premiumQuickStatValue}>AI</Text>
+                    <Text style={styles.premiumQuickStatLabel}>Priority Access</Text>
+                  </View>
+                  <View style={styles.premiumQuickStatDivider} />
+                  <View style={styles.premiumQuickStat}>
+                    <Text style={styles.premiumQuickStatValue}>24/7</Text>
+                    <Text style={styles.premiumQuickStatLabel}>Unlimited Use</Text>
+                  </View>
+                </View>
               </View>
+            </LinearGradient>
+
+            {/* Feature Cards */}
+            <View style={styles.featuresSection}>
+              <Text style={styles.featuresSectionTitle}>Everything You Get with Pro</Text>
+
+              <View style={styles.featureCard}>
+                <View style={styles.featureIconContainer}>
+                  <MaterialCommunityIcons name="lightning-bolt" size={24} color={gold} />
+                </View>
+                <View style={styles.featureContent}>
+                  <Text style={styles.featureTitle}>10 Daily Scans</Text>
+                  <Text style={styles.featureDescription}>
+                    5x more scans than free. Analyze every meal, snack, and ingredient without limits.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.featureCard}>
+                <View style={styles.featureIconContainer}>
+                  <MaterialCommunityIcons name="rocket-launch" size={24} color={gold} />
+                </View>
+                <View style={styles.featureContent}>
+                  <Text style={styles.featureTitle}>Priority AI Processing</Text>
+                  <Text style={styles.featureDescription}>
+                    Skip the queue with dedicated AI capacity. Get instant, accurate nutrition data in seconds.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.featureCard}>
+                <View style={styles.featureIconContainer}>
+                  <MaterialCommunityIcons name="chart-timeline-variant" size={24} color={gold} />
+                </View>
+                <View style={styles.featureContent}>
+                  <Text style={styles.featureTitle}>Detailed Macro Breakdown</Text>
+                  <Text style={styles.featureDescription}>
+                    Full nutritional analysis including proteins, carbs, fats, fiber, and micronutrients.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.featureCard}>
+                <View style={styles.featureIconContainer}>
+                  <MaterialCommunityIcons name="shield-check" size={24} color={gold} />
+                </View>
+                <View style={styles.featureContent}>
+                  <Text style={styles.featureTitle}>Guaranteed Accuracy</Text>
+                  <Text style={styles.featureDescription}>
+                    We reserve your AI slot before scanning so you never lose a scan to server limits.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.featureCard}>
+                <View style={styles.featureIconContainer}>
+                  <MaterialCommunityIcons name="history" size={24} color={gold} />
+                </View>
+                <View style={styles.featureContent}>
+                  <Text style={styles.featureTitle}>Complete Meal History</Text>
+                  <Text style={styles.featureDescription}>
+                    Track your nutrition journey over time with full access to your scanning history.
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Pricing Plans - Highlighted for free/trial */}
+            <View style={styles.pricingContainer}>
+              <Text style={styles.pricingTitle}>Choose Your Plan</Text>
+
+              {/* Yearly Plan */}
+              <Pressable
+                onPress={() => setSelectedPlan('yearly')}
+                style={({ pressed }) => [
+                  styles.pricingOption,
+                  selectedPlan === 'yearly' && styles.pricingOptionSelected,
+                  pressed && { opacity: 0.95 },
+                ]}
+              >
+                <View style={styles.pricingBadge}>
+                  <Text style={styles.pricingBadgeText}>BEST VALUE</Text>
+                </View>
+                <View style={styles.pricingRadio}>
+                  <View style={[
+                    styles.radioOuter,
+                    selectedPlan === 'yearly' && styles.radioOuterSelected,
+                  ]}>
+                    {selectedPlan === 'yearly' && <View style={styles.radioInner} />}
+                  </View>
+                </View>
+                <View style={styles.pricingDetails}>
+                  <Text style={styles.pricingPlanName}>Yearly</Text>
+                  <Text style={styles.pricingPlanSub}>Save 29% • Just $5/month</Text>
+                </View>
+                <View style={styles.pricingPriceContainer}>
+                  <Text style={styles.pricingPrice}>$59.99</Text>
+                  <Text style={styles.pricingPeriod}>/year</Text>
+                </View>
+              </Pressable>
+
+              {/* Monthly Plan */}
+              <Pressable
+                onPress={() => setSelectedPlan('monthly')}
+                style={({ pressed }) => [
+                  styles.pricingOption,
+                  selectedPlan === 'monthly' && styles.pricingOptionSelected,
+                  pressed && { opacity: 0.95 },
+                ]}
+              >
+                <View style={styles.pricingRadio}>
+                  <View style={[
+                    styles.radioOuter,
+                    selectedPlan === 'monthly' && styles.radioOuterSelected,
+                  ]}>
+                    {selectedPlan === 'monthly' && <View style={styles.radioInner} />}
+                  </View>
+                </View>
+                <View style={styles.pricingDetails}>
+                  <Text style={styles.pricingPlanName}>Monthly</Text>
+                  <Text style={styles.pricingPlanSub}>Flexible • Cancel anytime</Text>
+                </View>
+                <View style={styles.pricingPriceContainer}>
+                  <Text style={styles.pricingPrice}>$6.99</Text>
+                  <Text style={styles.pricingPeriod}>/month</Text>
+                </View>
+              </Pressable>
+
               {!isTrial && (
-                <View style={styles.trialPill}>
-                  <MaterialCommunityIcons name="clock-outline" size={18} color={accent} />
-                  <Text style={styles.trialPillText}>14-day free trial included</Text>
+                <View style={styles.trialBanner}>
+                  <View style={styles.trialBannerIcon}>
+                    <MaterialCommunityIcons name="gift-outline" size={20} color={gold} />
+                  </View>
+                  <View style={styles.trialBannerContent}>
+                    <Text style={styles.trialBannerTitle}>14-Day Free Trial</Text>
+                    <Text style={styles.trialBannerSub}>Try all Pro features risk-free</Text>
+                  </View>
                 </View>
               )}
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>What you get</Text>
-              <View style={styles.benefitRow}>
-                <MaterialCommunityIcons name="lightning-bolt" size={20} color={highlight} />
-                <View style={styles.benefitCopy}>
-                  <Text style={styles.benefitTitle}>Unlimited scans (10/day)</Text>
-                  <Text style={styles.benefitText}>No friction, no queue. Trial and Pro get the fastest AI responses.</Text>
-                </View>
-              </View>
-              <View style={styles.benefitRow}>
-                <MaterialCommunityIcons name="shield-check" size={20} color={highlight} />
-                <View style={styles.benefitCopy}>
-                  <Text style={styles.benefitTitle}>Guaranteed access</Text>
-                  <Text style={styles.benefitText}>We reserve your spot before hitting the AI so you never waste a scan.</Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.actionsCard}>
+            {/* CTA Buttons - Prominent for free/trial */}
+            <View style={styles.actionsCardHighlight}>
               {!trialUnavailable && (
                 <Pressable
                   onPress={handleStartTrial}
                   disabled={loadingTrial}
                   style={({ pressed }) => [
-                    styles.primaryCta,
+                    styles.primaryCtaGold,
                     (pressed || loadingTrial) && styles.primaryCtaPressed,
                   ]}
                 >
-                  <Text style={styles.primaryCtaLabel}>
+                  <MaterialCommunityIcons name="crown" size={20} color="#fff" />
+                  <Text style={styles.primaryCtaLabelHighlight}>
                     {loadingTrial ? 'Starting trial…' : trialCtaLabel}
                   </Text>
                 </Pressable>
               )}
 
               <Pressable
-                onPress={handleUpgrade}
+                onPress={() => handleUpgrade()}
                 disabled={alreadyOnPro}
                 style={({ pressed }) => [
-                  styles.upgradeCta,
+                  styles.upgradeCtaNavy,
                   pressed && { opacity: 0.9 },
                   alreadyOnPro && styles.upgradeCtaDisabled,
                 ]}
               >
-                <Text style={[styles.upgradeCtaLabel, alreadyOnPro && { color: muted }]}>
-                  {alreadyOnPro ? 'Already on Pro' : 'Upgrade to Pro'}
+                <Text style={[styles.upgradeCtaLabelHighlight, alreadyOnPro && { color: muted }]}>
+                  {alreadyOnPro ? 'Already on Pro' : `Subscribe Now ${selectedPlan === 'yearly' ? '($59.99/yr)' : '($6.99/mo)'}`}
                 </Text>
               </Pressable>
 
-              <Pressable onPress={handleRestore} style={({ pressed }) => [styles.secondaryCta, pressed && { opacity: 0.7 }]}>
-                <Text style={styles.secondaryCtaLabel}>Restore purchases</Text>
+              <Pressable onPress={handleRestore} style={({ pressed }) => [styles.restoreCta, pressed && { opacity: 0.7 }]}>
+                <Text style={styles.restoreCtaLabel}>Restore purchases</Text>
               </Pressable>
 
               <Text style={styles.disclaimer}>
-                Subscription is managed by the App Store / Play Store. Trial converts to paid unless canceled at least 24 hours before renewal.
+                Cancel anytime. Subscription auto-renews unless cancelled 24 hours before period ends. Managed via App Store / Play Store.
               </Text>
-            </View>
-
-            {/* Stats Card - Show after upgrade section for non-Pro */}
-            <View style={[styles.card, styles.statsCard]}>
-              <Text style={styles.statsTitle}>YOUR ACTIVITY</Text>
-              <View style={styles.statsGrid}>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{usageStats.totalThisMonth}</Text>
-                  <Text style={styles.statLabel}>This month</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{usageStats.totalThisWeek}</Text>
-                  <Text style={styles.statLabel}>This week</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{usageStats.totalAllTime}</Text>
-                  <Text style={styles.statLabel}>All time</Text>
-                </View>
-              </View>
             </View>
           </>
         )}
 
-        {/* Pro users see manage subscription option */}
+        {/* Pro Member Experience */}
         {isPro && (
-          <View style={styles.actionsCard}>
-            <Pressable onPress={handleRestore} style={({ pressed }) => [styles.secondaryCta, pressed && { opacity: 0.7 }]}>
-              <Text style={styles.secondaryCtaLabel}>Manage subscription</Text>
-            </Pressable>
-            <Text style={styles.disclaimer}>
-              Your Pro subscription renews {access?.proRenewsAt ? `on ${new Date(access.proRenewsAt).toLocaleDateString()}` : 'automatically'}. Manage in App Store / Play Store settings.
-            </Text>
-          </View>
+          <>
+            {/* Pro Benefits Unlocked */}
+            <View style={styles.proBenefitsCard}>
+              <View style={styles.proBenefitsHeader}>
+                <MaterialCommunityIcons name="check-decagram" size={20} color={gold} />
+                <Text style={styles.proBenefitsTitle}>Your Pro Benefits</Text>
+              </View>
+
+              <View style={styles.proBenefitItem}>
+                <View style={styles.proBenefitIcon}>
+                  <MaterialCommunityIcons name="lightning-bolt" size={18} color={gold} />
+                </View>
+                <Text style={styles.proBenefitText}>10 daily scans</Text>
+                <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
+              </View>
+
+              <View style={styles.proBenefitItem}>
+                <View style={styles.proBenefitIcon}>
+                  <MaterialCommunityIcons name="rocket-launch" size={18} color={gold} />
+                </View>
+                <Text style={styles.proBenefitText}>Priority AI processing</Text>
+                <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
+              </View>
+
+              <View style={styles.proBenefitItem}>
+                <View style={styles.proBenefitIcon}>
+                  <MaterialCommunityIcons name="chart-timeline-variant" size={18} color={gold} />
+                </View>
+                <Text style={styles.proBenefitText}>Detailed macro breakdown</Text>
+                <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
+              </View>
+
+              <View style={styles.proBenefitItem}>
+                <View style={styles.proBenefitIcon}>
+                  <MaterialCommunityIcons name="history" size={18} color={gold} />
+                </View>
+                <Text style={styles.proBenefitText}>Complete meal history</Text>
+                <MaterialCommunityIcons name="check" size={18} color="#4CAF50" />
+              </View>
+            </View>
+
+            {/* Subscription Management */}
+            <View style={styles.proManageCard}>
+              <Text style={styles.proManageTitle}>Subscription</Text>
+              <View style={styles.proManagePlanRow}>
+                <View style={styles.proManagePlanInfo}>
+                  <Text style={styles.proManagePlanName}>Umami Pro</Text>
+                  <Text style={styles.proManagePlanPrice}>$6.99/mo or $59.99/yr</Text>
+                </View>
+                <View style={styles.proManageActiveBadge}>
+                  <Text style={styles.proManageActiveText}>Active</Text>
+                </View>
+              </View>
+              <Pressable
+                onPress={handleRestore}
+                style={({ pressed }) => [styles.proManageButton, pressed && { opacity: 0.8 }]}
+              >
+                <MaterialCommunityIcons name="cog-outline" size={18} color={accent} />
+                <Text style={styles.proManageButtonText}>Manage Subscription</Text>
+              </Pressable>
+              <Text style={styles.proManageDisclaimer}>
+                Manage billing in App Store / Play Store settings
+              </Text>
+            </View>
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -632,6 +819,586 @@ const styles = StyleSheet.create({
     color: muted,
     fontSize: 12,
     lineHeight: 18,
+    textAlign: 'center',
+  },
+  // Pricing container styles
+  pricingContainer: {
+    backgroundColor: card,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: highlight,
+    gap: 12,
+    shadowColor: highlight,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  pricingTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: accent,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  pricingOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: border,
+    backgroundColor: '#FAFBFC',
+    gap: 12,
+    position: 'relative',
+  },
+  pricingOptionSelected: {
+    borderColor: highlight,
+    backgroundColor: '#FDF8EE',
+  },
+  pricingBadge: {
+    position: 'absolute',
+    top: -10,
+    right: 12,
+    backgroundColor: highlight,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  pricingBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  pricingRadio: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterSelected: {
+    borderColor: highlight,
+  },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: highlight,
+  },
+  pricingDetails: {
+    flex: 1,
+  },
+  pricingPlanName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: accent,
+  },
+  pricingPlanSub: {
+    fontSize: 12,
+    color: muted,
+    marginTop: 2,
+  },
+  pricingPriceContainer: {
+    alignItems: 'flex-end',
+  },
+  pricingPrice: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: accent,
+  },
+  pricingPeriod: {
+    fontSize: 12,
+    color: muted,
+  },
+  // Highlighted action card for free/trial
+  actionsCardHighlight: {
+    backgroundColor: card,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: highlight,
+    gap: 12,
+    shadowColor: highlight,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  primaryCtaHighlight: {
+    backgroundColor: highlight,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  primaryCtaLabelHighlight: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 17,
+  },
+  upgradeCtaHighlight: {
+    backgroundColor: accent,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  upgradeCtaLabelHighlight: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  // Subtle pricing for Pro users
+  proPlansCard: {
+    backgroundColor: '#F8F9FB',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E6E8EB',
+    gap: 10,
+  },
+  proPlansTitle: {
+    fontSize: 12,
+    color: muted,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  proPlansRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  proPlanItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  proPlanPrice: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: muted,
+  },
+  proPlanPeriod: {
+    fontSize: 12,
+    color: muted,
+    marginTop: 2,
+  },
+  proPlanSaving: {
+    fontSize: 10,
+    color: highlight,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  proPlanDivider: {
+    width: 1,
+    height: 36,
+    backgroundColor: border,
+  },
+  // Premium Hero Styles
+  premiumHero: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: navy,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  premiumHeroContent: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  crownBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(216, 166, 72, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(216, 166, 72, 0.3)',
+  },
+  premiumHeroLabel: {
+    color: gold,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 2,
+    marginBottom: 8,
+  },
+  premiumHeroHeadline: {
+    color: '#fff',
+    fontSize: 26,
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: 34,
+    marginBottom: 8,
+  },
+  premiumHeroSub: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: 12,
+  },
+  premiumDivider: {
+    width: 60,
+    height: 2,
+    backgroundColor: 'rgba(216, 166, 72, 0.4)',
+    borderRadius: 1,
+    marginVertical: 18,
+  },
+  premiumQuickStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  premiumQuickStat: {
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  premiumQuickStatValue: {
+    color: gold,
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  premiumQuickStatLabel: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 11,
+    marginTop: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  premiumQuickStatDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  // Feature Cards Section
+  featuresSection: {
+    gap: 12,
+  },
+  featuresSectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: accent,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  featureCard: {
+    flexDirection: 'row',
+    backgroundColor: card,
+    borderRadius: 16,
+    padding: 16,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  featureIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#FDF8EE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#F0E6D3',
+  },
+  featureContent: {
+    flex: 1,
+    gap: 4,
+  },
+  featureTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: accent,
+  },
+  featureDescription: {
+    fontSize: 13,
+    color: muted,
+    lineHeight: 19,
+  },
+  // Trial Banner
+  trialBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: navy,
+    borderRadius: 12,
+    padding: 14,
+    gap: 12,
+  },
+  trialBannerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(216, 166, 72, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trialBannerContent: {
+    flex: 1,
+  },
+  trialBannerTitle: {
+    color: gold,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  trialBannerSub: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  // Gold CTA Button
+  primaryCtaGold: {
+    backgroundColor: gold,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: gold,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  // Navy CTA Button
+  upgradeCtaNavy: {
+    backgroundColor: navy,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  // Restore CTA
+  restoreCta: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  restoreCtaLabel: {
+    color: muted,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  // Pro Member Styles
+  proHero: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: navy,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  proHeroContent: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  proHeroBadge: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(216, 166, 72, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    borderWidth: 2,
+    borderColor: 'rgba(216, 166, 72, 0.3)',
+  },
+  proHeroTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  proHeroSubtitle: {
+    color: gold,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  proHeroDivider: {
+    width: 50,
+    height: 2,
+    backgroundColor: 'rgba(216, 166, 72, 0.3)',
+    borderRadius: 1,
+    marginVertical: 16,
+  },
+  proHeroRenewal: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  proHeroRenewalText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 13,
+  },
+  // Pro Benefits Card
+  proBenefitsCard: {
+    backgroundColor: card,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E8D5B5',
+    gap: 12,
+    shadowColor: gold,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  proBenefitsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 4,
+  },
+  proBenefitsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: accent,
+  },
+  proBenefitItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    backgroundColor: '#FDFBF7',
+    borderRadius: 10,
+  },
+  proBenefitIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#FDF8EE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  proBenefitText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+    color: accent,
+  },
+  // Pro Stats Card
+  proStatsCard: {
+    backgroundColor: '#FFFCF7',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E8D5B5',
+    gap: 14,
+  },
+  proStatsTitle: {
+    fontSize: 12,
+    color: goldDark,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+  },
+  proStatsGrid: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  proStatItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  proStatValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: navy,
+    marginBottom: 4,
+  },
+  proStatLabel: {
+    fontSize: 12,
+    color: muted,
+  },
+  proStatDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#E8D5B5',
+  },
+  // Pro Management Card
+  proManageCard: {
+    backgroundColor: card,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: border,
+    gap: 12,
+  },
+  proManageTitle: {
+    fontSize: 12,
+    color: muted,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  proManagePlanRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  proManagePlanInfo: {
+    gap: 2,
+  },
+  proManagePlanName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: accent,
+  },
+  proManagePlanPrice: {
+    fontSize: 13,
+    color: muted,
+  },
+  proManageActiveBadge: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  proManageActiveText: {
+    color: '#2E7D32',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  proManageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F5F6F8',
+    borderRadius: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: border,
+  },
+  proManageButtonText: {
+    color: accent,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  proManageDisclaimer: {
+    color: muted,
+    fontSize: 12,
     textAlign: 'center',
   },
 });
