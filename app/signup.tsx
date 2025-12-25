@@ -1,30 +1,30 @@
-import { updateUserProfile } from '@/state/user';
 import { supabase } from '@/lib/supabase';
+import { updateUserProfile } from '@/state/user';
 import {
-  Inter_300Light,
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-  Inter_700Bold,
-  useFonts,
+    Inter_300Light,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    useFonts,
 } from '@expo-google-fonts/inter';
+import { makeRedirectUri } from 'expo-auth-session';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
-import { makeRedirectUri } from 'expo-auth-session';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -97,7 +97,8 @@ export default function SignUpScreen() {
         password: password.trim(),
         options: {
           data: {
-            name: name.trim() || 'Friend',
+            // Only set name if user provided one, otherwise leave empty
+            name: name.trim() || '',
           },
         },
       });
@@ -125,9 +126,9 @@ export default function SignUpScreen() {
         return;
       }
 
-      // Session established successfully
+      // Session established successfully - set name or empty string
       updateUserProfile({
-        name: name.trim() || 'Friend',
+        name: name.trim() || '',
         email: email.trim(),
       });
 

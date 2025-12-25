@@ -82,7 +82,7 @@ const mapProfileRowToState = (row: ProfileRow) => {
     activityLevel: row.activity_level ?? undefined,
     age: row.age ?? undefined,
     biologicalSex: row.biological_sex ?? undefined,
-    heightCm: row.height_cm ?? 175, // Default to 175cm if not set
+    heightCm: row.height_cm ?? 0, // Default to 0 if not set - user must add in profile
     heightUnit: (row.height_unit as 'cm' | 'inches') ?? 'cm',
   };
 
@@ -151,7 +151,7 @@ export const upsertProfile = async (params: {
     starting_weight: startingWeight ?? null,
     timeline_weeks: timelineWeeks ?? null,
     activity_level: activityLevel ?? null,
-    height_cm: heightCm ?? 175, // Default to 175cm
+    height_cm: heightCm ?? 0, // Default to 0 - user must add in profile for accurate calorie calculations
     height_unit: heightUnit ?? 'cm',
   };
 

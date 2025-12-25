@@ -17,7 +17,7 @@ export type UserProfile = {
 type Listener = (profile: UserProfile) => void;
 
 let userProfile: UserProfile = {
-  name: 'Nicolas',
+  name: '',
   email: undefined,
   age: undefined,
   height: undefined,
@@ -25,7 +25,7 @@ let userProfile: UserProfile = {
   goalWeight: undefined,
   activityLevel: undefined,
   goalType: undefined,
-  avatarUri: undefined,
+  avatarUri: null, // Explicitly null until user sets a profile picture
   dateOfBirth: undefined,
   biologicalSex: undefined,
 };

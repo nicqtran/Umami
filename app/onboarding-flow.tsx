@@ -1,31 +1,31 @@
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { upsertProfile } from '@/services/profile';
 import { ActivityLevel, BiologicalSex, updateGoals } from '@/state/goals';
 import { getUserProfile, updateUserProfile } from '@/state/user';
-import { upsertProfile } from '@/services/profile';
-import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import {
-  Inter_300Light,
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-  Inter_700Bold,
-  useFonts,
+    Inter_300Light,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    useFonts,
 } from '@expo-google-fonts/inter';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
-  Animated,
-  Dimensions,
-  Easing,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    Alert,
+    Animated,
+    Dimensions,
+    Easing,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 // Design tokens
@@ -260,6 +260,10 @@ export default function OnboardingFlowScreen() {
           biologicalSex: sex!,
         });
 
+        // NOTE: Height is not collected during onboarding, so it defaults to 0.
+        // Users MUST add their height in profile settings for accurate calorie calculations.
+        // Calorie calculations require: age, biologicalSex, heightCm, currentWeight, goalWeight,
+        // activityLevel, and timelineWeeks. Missing height will result in inaccurate TDEE/BMR.
         updateGoals({
           startingWeight: weightNum,
           currentWeight: weightNum,
@@ -268,7 +272,7 @@ export default function OnboardingFlowScreen() {
           activityLevel: activity!,
           age: ageNum,
           biologicalSex: sex!,
-          heightCm: 175, // Default height for now
+          heightCm: 0, // User must add height in profile for accurate calorie calculations
         });
 
         // Save to Supabase
@@ -285,6 +289,7 @@ export default function OnboardingFlowScreen() {
           startingWeight: weightNum,
           timelineWeeks: timeline!,
           activityLevel: activity!,
+          heightCm: 0, // User must add height in profile for accurate calorie calculations
         });
 
         // Navigate after successful save

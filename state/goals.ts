@@ -206,20 +206,23 @@ const calculateDerivedValues = (
   };
 };
 
-// Initialize with default values
+// Initialize with no default values - user must enter their info
+// NOTE: Calorie calculations require: age, biologicalSex, heightCm, currentWeight, goalWeight, 
+// activityLevel, and timelineWeeks. If these are not provided during sign-up, users MUST add 
+// them in their profile settings before accurate calorie recommendations can be calculated.
 let goals: GoalsState = {
-  startingWeight: 180,
-  currentWeight: 175,
-  goalWeight: 165,
-  timelineWeeks: 12,
+  startingWeight: 0,
+  currentWeight: 0,
+  goalWeight: 0,
+  timelineWeeks: 0,
   activityLevel: 'moderate',
-  heightCm: 175,
+  heightCm: 0,
   heightUnit: 'cm',
-  age: 30,
-  biologicalSex: 'male',
+  age: 0,
+  biologicalSex: 'prefer-not-to-say',
   goalType: 'loss',
-  weeklyTarget: 1,
-  ...calculateDerivedValues(180, 175, 165, 12, 'moderate', 175, 30, 'male', 'loss', 1),
+  weeklyTarget: 0,
+  ...calculateDerivedValues(0, 0, 0, 0, 'moderate', 0, 0, 'prefer-not-to-say', 'loss', 0),
 };
 
 const listeners: Set<Listener> = new Set();
@@ -232,6 +235,7 @@ const notify = () => {
 export const getGoals = (): GoalsState => goals;
 
 // Update goals - automatically recalculates all derived values
+// Note: weeklyTarget should be calculated based on (startingWeight - goalWeight) / timelineWeeks
 export const updateGoals = (updates: GoalsInput): void => {
   const prevGoals = goals;
   const newStartingWeight = updates.startingWeight ?? prevGoals.startingWeight;
@@ -244,7 +248,19 @@ export const updateGoals = (updates: GoalsInput): void => {
   const newAge = updates.age ?? prevGoals.age;
   const newBiologicalSex = updates.biologicalSex ?? prevGoals.biologicalSex;
   const newGoalType = updates.goalType ?? prevGoals.goalType ?? 'maintenance';
-  const newWeeklyTarget = Math.max(0, updates.weeklyTarget ?? prevGoals.weeklyTarget ?? 0);
+  
+  // Calculate weeklyTarget based on the total weight change needed and timeline
+  // This ensures lbs/week is always accurate based on start weight, goal weight, and timeline
+  let calculatedWeeklyTarget = 0;
+  if (newTimelineWeeks > 0 && newStartingWeight > 0 && newGoalWeight > 0) {
+    const totalWeightChange = Math.abs(newStartingWeight - newGoalWeight);
+    calculatedWeeklyTarget = totalWeightChange / newTimelineWeeks;
+  }
+  
+  // Allow manual override if explicitly provided, otherwise use calculated value
+  const newWeeklyTarget = updates.weeklyTarget !== undefined 
+    ? Math.max(0, updates.weeklyTarget) 
+    : calculatedWeeklyTarget;
 
   const derived = calculateDerivedValues(
     newStartingWeight,
@@ -270,6 +286,7 @@ export const updateGoals = (updates: GoalsInput): void => {
     age: newAge,
     biologicalSex: newBiologicalSex,
     goalType: newGoalType,
+    weeklyTarget: newWeeklyTarget,
     ...derived,
   };
   

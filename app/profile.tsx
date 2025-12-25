@@ -1,5 +1,6 @@
 import { useStreak } from '@/hooks/useStreak';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+import { supabase } from '@/lib/supabase';
 import { upsertProfile } from '@/services/profile';
 import { ActivityLevel, BiologicalSex, getGoals, GoalsState, HeightUnit, subscribeGoals, updateGoals } from '@/state/goals';
 import { getUserProfile, subscribeUserProfile, updateUserProfile, UserProfile } from '@/state/user';
@@ -10,19 +11,20 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActionSheetIOS,
-  Animated,
-  Dimensions,
-  Easing,
-  Image,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActionSheetIOS,
+    Alert,
+    Animated,
+    Dimensions,
+    Easing,
+    Image,
+    Platform,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -327,7 +329,10 @@ export default function ProfileScreen() {
 
   // Helper to get display height in current unit
   const getDisplayHeight = () => {
-    const heightCm = goals?.heightCm ?? 175;
+    const heightCm = goals?.heightCm ?? 0;
+    if (heightCm === 0) {
+      return 0; // Return 0 to show it needs to be set
+    }
     if (goals?.heightUnit === 'inches') {
       return Math.round(heightCm / 2.54);
     }
@@ -337,6 +342,30 @@ export default function ProfileScreen() {
   const cancelWeightEdit = () => {
     setEditingWeight(null);
     setWeightDraft('');
+  };
+
+  // Handle sign out
+  const handleSignOut = async () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await supabase.auth.signOut();
+              router.replace('/login');
+            } catch (error: any) {
+              Alert.alert('Error', 'Failed to sign out. Please try again.');
+              console.error('Sign out error:', error);
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Render editable value - inline TextInput when editing, Text when not
@@ -406,7 +435,7 @@ export default function ProfileScreen() {
                 <Image source={{ uri: userProfile.avatarUri }} style={styles.avatarImage} />
               ) : (
                 <View style={styles.avatarLarge}>
-                  <Text style={[styles.avatarText, titleFont]}>{userProfile.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}</Text>
+                  <MaterialCommunityIcons name="account-circle-outline" size={48} color={muted} />
                 </View>
               )}
               <View style={styles.avatarEditBadge}>
@@ -455,7 +484,7 @@ export default function ProfileScreen() {
                 </View>
                 <Pressable 
                   style={styles.bodyStatValueContainer}
-                  onPress={() => openWeightEditor('height', goals?.heightCm ?? 175)}>
+                  onPress={() => openWeightEditor('height', goals?.heightCm ?? 0)}>
                   {editingWeight === 'height' ? (
                     <TextInput
                       ref={(ref) => { inputRefs.current['height'] = ref; }}
@@ -468,7 +497,9 @@ export default function ProfileScreen() {
                       selectTextOnFocus
                     />
                   ) : (
-                    <Text style={[styles.bodyStatValue, bodyFont]}>{getDisplayHeight()}</Text>
+                    <Text style={[styles.bodyStatValue, bodyFont, getDisplayHeight() === 0 && { opacity: 0.4 }]}>
+                      {getDisplayHeight() === 0 ? '—' : getDisplayHeight()}
+                    </Text>
                   )}
                   <Text style={[styles.bodyStatUnit, lightFont]}>{goals?.heightUnit === 'inches' ? 'in' : 'cm'}</Text>
                 </Pressable>
@@ -478,7 +509,7 @@ export default function ProfileScreen() {
                 <Text style={[styles.bodyStatLabel, lightFont]}>Age</Text>
                 <Pressable 
                   style={styles.bodyStatValueContainer}
-                  onPress={() => openWeightEditor('age', goals?.age ?? 30)}>
+                  onPress={() => openWeightEditor('age', goals?.age ?? 0)}>
                   {editingWeight === 'age' ? (
                     <TextInput
                       ref={(ref) => { inputRefs.current['age'] = ref; }}
@@ -491,7 +522,9 @@ export default function ProfileScreen() {
                       selectTextOnFocus
                     />
                   ) : (
-                    <Text style={[styles.bodyStatValue, bodyFont]}>{goals?.age ?? 30}</Text>
+                    <Text style={[styles.bodyStatValue, bodyFont, (goals?.age ?? 0) === 0 && { opacity: 0.4 }]}>
+                      {(goals?.age ?? 0) === 0 ? '—' : (goals?.age ?? 0)}
+                    </Text>
                   )}
                   <Text style={[styles.bodyStatUnit, lightFont]}>yrs</Text>
                 </Pressable>
@@ -578,9 +611,19 @@ export default function ProfileScreen() {
                 <Text style={[styles.timelineUnit, bodyFont]}>weeks</Text>
               </View>
               {goals && (
-                <Text style={[styles.calculatedInfo, lightFont]}>
-                  {goals.weeklyTarget.toFixed(2)} lbs/week • {goals.dailyCalorieGoal} cal/day
-                </Text>
+                <>
+                  <Text style={[styles.calculatedInfo, lightFont]}>
+                    {goals.weeklyTarget.toFixed(2)} lbs/week • {goals.dailyCalorieGoal} cal/day
+                  </Text>
+                  {(goals.heightCm === 0 || goals.age === 0) && (
+                    <View style={styles.warningContainer}>
+                      <MaterialCommunityIcons name="alert-circle-outline" size={14} color="#F59E0B" />
+                      <Text style={[styles.warningText, lightFont]}>
+                        Add height & age above for accurate calorie calculations
+                      </Text>
+                    </View>
+                  )}
+                </>
               )}
             </Pressable>
           </Animated.View>
@@ -613,6 +656,14 @@ export default function ProfileScreen() {
               ))}
             </View>
           </Animated.View>
+
+          {/* Sign Out Button */}
+          <View style={styles.signOutContainer}>
+            <Pressable style={styles.signOutButton} onPress={handleSignOut}>
+              <MaterialCommunityIcons name="logout" size={20} color="#EF4444" />
+              <Text style={[styles.signOutText, bodyFont]}>Sign Out</Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </Animated.View>
     </SafeAreaView>
@@ -815,6 +866,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: muted,
     marginTop: 8,
+  },
+  warningContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#F59E0B',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#D97706',
+    flex: 1,
+    lineHeight: 16,
   },
   sectionTitle: {
     fontSize: 16,
@@ -1156,5 +1225,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: muted,
     opacity: 0.7,
+  },
+  // Sign Out Button Styles
+  signOutContainer: {
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  signOutButton: {
+    backgroundColor: card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  signOutText: {
+    fontSize: 16,
+    color: '#EF4444',
+    fontWeight: '600',
+    letterSpacing: 0.1,
   },
 });
